@@ -1,0 +1,151 @@
+class SongQuality {
+  final String type;
+  final String? size;
+  SongQuality(this.type, [this.size]);
+  Map<String, dynamic> toJson() => {'type': type, 'size': size};
+}
+
+class Song {
+  String songmid;
+  String source;
+  String? types;
+  String? id;
+  String name;
+  String singer;
+  String? albumId;
+  String? albumName;
+  String? pic;
+  int? interval;
+  String? qualitys; // comma joined
+
+  /// 网易云的版权标记。实测：fee=1 的歌端内直连 128k/320k/flac 三档全部拿不到链接，
+  /// fee=0 和 8 则都能出——所以这一个数字就够判断「这首十有八九要换版本」。
+  /// 其他曲库没有这个字段，留 0 表示未知/免费。
+  final int fee;
+  Map<String, SongQuality> _types;
+
+  Song({
+    this.songmid = '',
+    this.source = '',
+    this.types,
+    this.id,
+    this.name = '',
+    this.singer = '',
+    this.albumId,
+    this.albumName,
+    this.pic,
+    this.interval,
+    this.qualitys,
+    this.fee = 0,
+    Map<String, SongQuality>? typeMap,
+  }) : _types = typeMap ?? {};
+
+  Map<String, SongQuality> get typeMap => _types;
+
+  /// 这首在网易云端内放不出来（会员/付费墙）。
+  bool get needsVip => fee == 1 && source == 'wy';
+
+  /// 换源时这条候选本身就被付费墙挡着。网易云 fee=1 要会员，腾讯 payplay=1 同样要
+  /// 会员（实测匿名取链回 result:104003）；酷我的付费标记不可靠，交给取链去判断。
+  bool get twinBlocked => fee == 1 && (source == 'wy' || source == 'tx');
+
+  /// 把明显是分支版本的排到最后，其余顺序原样保留（榜单名次、搜索相关度）。
+  ///
+  /// 自检/检测拿哪首都算「这个平台通不通」，但界面上写「拿《晴天（DJ降调0.9x版）》
+  /// 试出来的档位」就没人信这是同一首歌了。网易云的 cloudsearch 匿名结果里翻唱、
+  /// 深情版、AI 版能占掉大半，所以这一步现在 wy 和 tx 两边都要走。
+  /// 带括号的基本不是原版，这一刀够便宜也不误伤：真原版偶尔带括号时它只是排到最后，
+  /// 仍然会被用上。
+  static List<Song> preferOriginal(Iterable<Song> songs) {
+    final tagged = songs.where((s) => _bracket.hasMatch(s.name)).toList();
+    return [...songs.where((s) => !_bracket.hasMatch(s.name)), ...tagged];
+  }
+
+  static final RegExp _bracket = RegExp(r'[（(【\[]');
+
+  factory Song.fromJson(Map<String, dynamic> j) => Song(
+        songmid: j['songmid'] ?? j['hash'] ?? j['mid'] ?? '',
+        source: j['source'] ?? '',
+        id: j['id']?.toString(),
+        name: j['name'] ?? '',
+        singer: j['singer'] ?? '',
+        albumId: j['albumId']?.toString(),
+        albumName: j['albumName'],
+        pic: j['pic'],
+        interval: j['interval'] is num ? (j['interval'] as num).toInt() : null,
+        fee: j['fee'] is num ? (j['fee'] as num).toInt() : 0,
+        typeMap: (j['types'] as Map?)?.map(
+              (k, v) => MapEntry(k.toString(), SongQuality(k.toString(), v?['size']?.toString())),
+            ) ??
+            {},
+      );
+
+  Song mergeRaw(Map<String, dynamic> raw) {
+    // merge a search-result song object (lx format) into this instance
+    id = raw['id']?.toString() ?? id;
+    name = raw['name'] ?? name;
+    singer = raw['singer'] ?? singer;
+    albumName = raw['albumName'] ?? albumName;
+    albumId = raw['albumId']?.toString() ?? albumId;
+    pic = raw['pic'] ?? pic;
+    if (raw['duration'] is num) interval = (raw['duration'] as num).toInt();
+    if (raw['interval'] is num) interval = (raw['interval'] as num).toInt();
+    final t = raw['types'];
+    if (t is List) {
+      for (final q in t) {
+        if (q is Map) {
+          final type = q['type']?.toString();
+          if (type != null) _types[type] = SongQuality(type, q['size']?.toString());
+        }
+      }
+    } else if (t is Map) {
+      t.forEach((k, v) => _types[k.toString()] = SongQuality(k.toString(), v?.toString()));
+    }
+    final sq = raw['source'];
+    if (sq is String) source = sq;
+    final mid = raw['songmid'] ?? raw['hash'] ?? raw['mid'];
+    if (mid != null) songmid = mid.toString();
+    return this;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'songmid': songmid,
+        'source': source,
+        'id': id,
+        'name': name,
+        'singer': singer,
+        'albumId': albumId,
+        'albumName': albumName,
+        'pic': pic,
+        'interval': interval,
+        'fee': fee,
+        'types': _types.map((k, v) => MapEntry(k, v.toJson())),
+      };
+
+  /// The `musicInfo` object the lx-music protocol hands to user scripts for
+  /// the `musicUrl` action. Scripts read different id fields per source
+  /// (`hash ?? songmid`, `songmid || id || mid`), so we mirror the single
+  /// identifier we captured across all of them. For kw that identifier is the
+  /// numeric rid, which lx-music-mobile also treats as the hash.
+  Map<String, dynamic> toMusicInfo() => {
+        'name': name,
+        'singer': singer,
+        'text': '$name $singer'.trim(),
+        'albumName': albumName,
+        'albumId': albumId,
+        'id': id ?? songmid,
+        'songmid': songmid,
+        'hash': songmid,
+        'mid': songmid,
+        'sid': songmid,
+        'interval': interval,
+        'duration': interval,
+        'source': source,
+        'types': _types.map((k, v) => MapEntry(k, v.size ?? '')),
+      };
+
+  String get qualityLabels => _types.keys.join(',');
+
+  static List<Song> listFromJson(dynamic arr) =>
+      (arr as List?)?.map((e) => Song.fromJson(Map<String, dynamic>.from(e))).toList() ?? [];
+}

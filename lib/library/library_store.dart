@@ -1,0 +1,453 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
+
+import '../models/results.dart';
+import '../models/song.dart';
+import '../util/json_file.dart';
+import 'user_playlist.dart';
+
+enum LibraryKind { favorites, recent, downloaded }
+
+/// Lightweight JSON-file-backed library for favorites / recent plays / downloads.
+/// Keeps this project dependency-free (no sqflite schema churn) while
+/// remaining safe against process restarts.
+class LibraryStore extends ChangeNotifier {
+  static final LibraryStore instance = LibraryStore._();
+  LibraryStore._();
+
+  late final Directory _root;
+  final Map<LibraryKind, List<Song>> _by = {
+    LibraryKind.favorites: [],
+    LibraryKind.recent: [],
+    LibraryKind.downloaded: [],
+  };
+  final Map<LibraryKind, bool> _dirty = {
+    LibraryKind.favorites: false,
+    LibraryKind.downloaded: false,
+    LibraryKind.recent: false,
+  };
+
+  /// `source:songmid` -> absolute path of the file this app downloaded, so
+  /// playback can skip the network entirely.
+  final Map<String, String> _localPaths = {};
+
+  /// 自建歌单, persisted as one small JSON file.
+  final List<UserPlaylist> _playlists = [];
+  Timer? _autosave;
+  bool _loaded = false;
+
+  Future<void> init() async {
+    if (_loaded) return;
+    _root = Directory('${(await getApplicationDocumentsDirectory()).path}/library');
+    if (!_root.existsSync()) _root.createSync(recursive: true);
+    for (final kind in LibraryKind.values) {
+      final data = JsonFile.read(_file(kind));
+      if (data is List) {
+        _by[kind] = data.map((e) => Song.fromJson(Map<String, dynamic>.from(e))).toList();
+      }
+    }
+    final j = JsonFile.read(_pathsFile);
+    if (j is Map) {
+      j.forEach((k, v) {
+        if (k is String && v is String) _localPaths[k] = v;
+      });
+    }
+    final pj = JsonFile.read(_playlistsFile);
+    if (pj is List) {
+      _playlists.addAll(pj.whereType<Map>().map((e) => UserPlaylist.fromJson(Map<String, dynamic>.from(e))));
+    }
+    final sj = JsonFile.read(_sheetsFile);
+    if (sj is List) {
+      _sheets.addAll(sj.whereType<Map>().map((e) => SheetInfo.fromJson(Map<String, dynamic>.from(e))));
+    }
+    _readVip(JsonFile.read(_vipFile));
+    _loaded = true;
+    _favKeys = null;
+    notifyListeners();
+  }
+
+  File _file(LibraryKind kind) => File('${_root.path}/${kind.name}.json');
+  File get _pathsFile => File('${_root.path}/downloads_paths.json');
+  File get _playlistsFile => File('${_root.path}/playlists.json');
+
+  static String keyOf(Song s) => '${s.source}:${s.songmid}';
+
+  /// Path of the already-downloaded file for this song, or null when the song
+  /// is not on the device (or the file was deleted by the user).
+  String? localFile(Song s) {
+    final p = _localPaths[keyOf(s)];
+    if (p == null) return null;
+    return File(p).existsSync() ? p : null;
+  }
+
+  /// 列表每行都要问一次「下载过没有」，逐行 stat 磁盘会把构建拖慢，
+  /// 所以这里缓存 30 秒的结果。真正要拿路径去播放时走 [localFile]。
+  final Map<String, ({DateTime at, bool ok})> _exists = {};
+
+  bool hasLocalFile(Song s) {
+    final p = _localPaths[keyOf(s)];
+    if (p == null) return false;
+    final hit = _exists[p];
+    if (hit != null && DateTime.now().difference(hit.at) < const Duration(seconds: 30)) return hit.ok;
+    final ok = File(p).existsSync();
+    _exists[p] = (at: DateTime.now(), ok: ok);
+    return ok;
+  }
+
+  void recordLocalPath(Song s, String path) {
+    _localPaths[keyOf(s)] = path;
+    _exists.remove(path);
+    _writePaths();
+    _markDirty(LibraryKind.downloaded);
+  }
+
+  void _writePaths() => JsonFile.write(_pathsFile, _localPaths);
+
+
+  List<Song> list(LibraryKind kind) => List.unmodifiable(_by[kind] ?? const []);
+
+  /// 收藏集合每页几百行都在查，线性扫一遍列表会拖慢列表构建。
+  Set<String>? _favKeys;
+
+  bool isFavorite(Song s) =>
+      (_favKeys ??= {for (final e in _by[LibraryKind.favorites]!) keyOf(e)}).contains(keyOf(s));
+
+  void toggleFavorite(Song s) {
+    final list = _by[LibraryKind.favorites]!;
+    final idx = list.indexWhere((e) => e.source == s.source && e.songmid == s.songmid);
+    if (idx >= 0) {
+      list.removeAt(idx);
+    } else {
+      list.insert(0, s);
+    }
+    _markDirty(LibraryKind.favorites);
+  }
+
+  void recordRecent(Song s) {
+    final list = _by[LibraryKind.recent]!;
+    list.removeWhere((e) => e.source == s.source && e.songmid == s.songmid);
+    list.insert(0, s);
+    while (list.length > 200) {
+      list.removeLast();
+    }
+    _markDirty(LibraryKind.recent);
+  }
+
+  void markDownloaded(Song s) {
+    final list = _by[LibraryKind.downloaded]!;
+    list.removeWhere((e) => e.source == s.source && e.songmid == s.songmid);
+    list.insert(0, s);
+    _by[LibraryKind.downloaded] = list;
+    _markDirty(LibraryKind.downloaded);
+  }
+
+  /// Swaps the whole downloaded list (used after a bulk delete) and forgets the
+  /// local file mappings with it.
+  void replaceDownloaded(List<Song> songs) {
+    _by[LibraryKind.downloaded] = List.of(songs);
+    _localPaths.clear();
+    _writePaths();
+    _markDirty(LibraryKind.downloaded);
+  }
+
+  /// 移出单首歌。返回它原来排在第几（不在列表里就是 -1），调用方拿这个位置做「撤销」。
+  int remove(LibraryKind kind, Song s) {
+    final list = _by[kind];
+    if (list == null) return -1;
+    final i = list.indexWhere((e) => e.source == s.source && e.songmid == s.songmid);
+    if (i < 0) return -1;
+    list.removeAt(i);
+    if (kind == LibraryKind.downloaded) {
+      // Forget the local copy so playback falls back to streaming; the file
+      // itself is left alone (the user can clear it from 设置).
+      if (_localPaths.remove(keyOf(s)) != null) _writePaths();
+    }
+    _markDirty(kind);
+    return i;
+  }
+
+  /// 撤销一次「移出」：放回原来的位置。文件已经删掉的歌不该走这条路，所以只补记录。
+  void putBack(LibraryKind kind, Song s, int index) {
+    final list = _by[kind];
+    if (list == null) return;
+    if (list.any((e) => e.source == s.source && e.songmid == s.songmid)) return;
+    list.insert(index.clamp(0, list.length), s);
+    _markDirty(kind);
+  }
+
+  /// 整批清空，并把原内容返回给调用方做「撤销」。
+  List<Song> clear(LibraryKind kind) {
+    final old = List<Song>.of(_by[kind] ?? const []);
+    if (old.isEmpty) return old;
+    _by[kind] = <Song>[];
+    _markDirty(kind);
+    return old;
+  }
+
+  /// 撤销 [clear]：按原顺序整批放回去。
+  void restore(LibraryKind kind, List<Song> songs) {
+    if (songs.isEmpty) return;
+    _by[kind] = List<Song>.of(songs);
+    _markDirty(kind);
+  }
+
+  // ---- 自建歌单 -----------------------------------------------------------
+
+  List<UserPlaylist> get playlists => List.unmodifiable(_playlists);
+
+  UserPlaylist? playlist(String id) {
+    for (final p in _playlists) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  /// Which of the user's playlists already hold this song.
+  List<UserPlaylist> playlistsOf(Song s) => _playlists.where((p) => p.has(s)).toList();
+
+  UserPlaylist createPlaylist(String name) {
+    final trimmed = name.trim().isEmpty ? '未命名歌单' : name.trim();
+    final p = UserPlaylist(id: 'local-${DateTime.now().millisecondsSinceEpoch}', name: trimmed);
+    _playlists.insert(0, p);
+    _writePlaylists();
+    return p;
+  }
+
+  void renamePlaylist(String id, String name) {
+    final p = playlist(id);
+    final trimmed = name.trim();
+    if (p == null || trimmed.isEmpty || p.name == trimmed) return;
+    p.name = trimmed;
+    _writePlaylists();
+  }
+
+  void deletePlaylist(String id) {
+    final before = _playlists.length;
+    _playlists.removeWhere((p) => p.id == id);
+    if (_playlists.length == before) return;
+    _writePlaylists();
+  }
+
+  /// Returns true when the song was not in the playlist yet.
+  bool addToPlaylist(String id, Song s) {
+    final p = playlist(id);
+    if (p == null) return false;
+    final existing = p.songs.indexWhere((e) => e.source == s.source && e.songmid == s.songmid);
+    if (existing >= 0) return false;
+    p.songs.insert(0, s);
+    _writePlaylists();
+    return true;
+  }
+
+  /// 从自建歌单移出一首歌。返回它原来排在第几（不在里面就是 -1），
+  /// 调用方拿这个位置做「撤销」。
+  int removeFromPlaylist(String id, Song s) {
+    final p = playlist(id);
+    if (p == null) return -1;
+    final i = p.songs.indexWhere((e) => e.source == s.source && e.songmid == s.songmid);
+    if (i < 0) return -1;
+    p.songs.removeAt(i);
+    _writePlaylists();
+    return i;
+  }
+
+  /// 撤销一次「移出歌单」：放回原来的位置。
+  void putBackInPlaylist(String id, Song s, int index) {
+    final p = playlist(id);
+    if (p == null || index < 0) return;
+    p.songs.insert(index.clamp(0, p.songs.length), s);
+    _writePlaylists();
+  }
+
+  /// 自建歌单里拖动排序。
+  void reorderPlaylist(String id, int oldIndex, int newIndex) {
+    final p = playlist(id);
+    if (p == null) return;
+    final songs = p.songs;
+    if (oldIndex < 0 || oldIndex >= songs.length) return;
+    final moved = songs.removeAt(oldIndex);
+    songs.insert(newIndex.clamp(0, songs.length), moved);
+    _writePlaylists();
+  }
+
+  void _writePlaylists() {
+    notifyListeners();
+    JsonFile.write(_playlistsFile, _playlists.map((p) => p.toJson()).toList());
+  }
+
+  // ---- 一首歌一个源：放不出的歌记住能播的那个 ------------------------------
+  //
+  // 一首歌撞会员墙或整条链子跑空，要等十几二十秒。找到的替代版本落盘之后，
+  // 下次 resolveUrl 第一步就命中；确认过放不出的也记一笔，短期内直接快速失败，
+  // 不然 40 首的榜单每首都重跑一遍链子，跳到天黑。
+  //
+  // 不只会员歌：音源放不出的酷我单曲换到网易云同一首，也照这个记下来——
+  // 「一首歌一个源」本来就是按曲库里的每一条分别记住用哪个。
+
+  final Map<String, Song> _swaps = {};
+
+  /// 键 -> 「这条判定过期之前的毫秒时间戳」。过期时间而不是标记时间，
+  /// 因为会员歌和普通话不了的歌，值得重试验证的节奏不一样。
+  final Map<String, int> _deadUntil = {};
+
+  File get _vipFile => File('${_root.path}/vip_swaps.json');
+
+  /// 已经替她找到的可播版本；没有就是 null。
+  Song? swapSongFor(Song s) => _swaps[keyOf(s)];
+
+  bool hasSwapSong(Song s) => _swaps.containsKey(keyOf(s));
+
+  void rememberSwapSong(Song s, Song twin) {
+    if (keyOf(s) == keyOf(twin)) return;
+    _swaps[keyOf(s)] = twin;
+    _deadUntil.remove(keyOf(s));
+    _writeVip();
+  }
+
+  /// 缓存的那条也可能失效（音源换了、下架了），忘掉它让下次重新找。
+  void forgetSwapSong(Song s) {
+    if (_swaps.remove(keyOf(s)) != null) _writeVip();
+  }
+
+  /// 期限内确认过「找不到能播的版本」。到期就重新算，
+  /// 因为音源和版权都会变，一条判定不该管一辈子。
+  bool swapCheckedDead(Song s) {
+    final until = _deadUntil[keyOf(s)];
+    if (until == null) return false;
+    if (until <= DateTime.now().millisecondsSinceEpoch) {
+      _deadUntil.remove(keyOf(s));
+      _writeVip();
+      return false;
+    }
+    return true;
+  }
+
+  /// 会员歌版权松动得慢，一周问一次就够；普通话不了的多半是音源那阵子抽风，
+  /// 半天之后值得再试。
+  static const _deadVip = Duration(days: 7);
+  static const _deadOther = Duration(hours: 12);
+
+  void markSwapDead(Song s) {
+    final ttl = s.needsVip ? _deadVip : _deadOther;
+    _deadUntil[keyOf(s)] = DateTime.now().add(ttl).millisecondsSinceEpoch;
+    _swaps.remove(keyOf(s));
+    _writeVip();
+  }
+
+  /// 换音源之后调用：旧判定是在「那批取链能力」下得出的，不能继续拦着新歌。
+  void clearSwapDead() {
+    if (_deadUntil.isEmpty) return;
+    _deadUntil.clear();
+    _writeVip();
+  }
+
+  /// 列表里还需要体检的歌：会员墙后面、既没找到免费版也没确认过没有。
+  List<Song> vipNeedScan(Iterable<Song> songs) =>
+      songs.where((s) => s.needsVip && !hasSwapSong(s) && !swapCheckedDead(s)).toList();
+
+  int vipReadyCount(Iterable<Song> songs) => songs.where(hasSwapSong).length;
+
+  void _writeVip() {
+    JsonFile.write(_vipFile, {
+      'swaps': _swaps.map((k, v) => MapEntry(k, v.toJson())),
+      'dead': _deadUntil,
+    });
+  }
+
+  void _readVip(Object? raw) {
+    if (raw is! Map) return;
+    final swaps = raw['swaps'];
+    if (swaps is Map) {
+      swaps.forEach((k, v) {
+        if (k is! String || v is! Map) return;
+        try {
+          _swaps[k] = Song.fromJson(Map<String, dynamic>.from(v));
+        } catch (_) {}
+      });
+    }
+    final dead = raw['dead'];
+    if (dead is Map) {
+      dead.forEach((k, v) {
+        // 老版本这里存的是「标记时间」，恒在过去 → 读进来当场就过期，
+        // 第一次访问时被 swapCheckedDead 清掉重来，不会把歌永久锁死。
+        if (k is String && v is num) _deadUntil[k] = v.toInt();
+      });
+    }
+  }
+
+  // ---- 收藏的歌单（发现/搜索里的网易云歌单）--------------------------------
+  //
+  // 只存卡片那几个字段：曲目每次进详情页现取，歌单在网易云那边被改动过也能看到
+  // 最新内容，代价是断网时打不开。
+
+  final List<SheetInfo> _sheets = [];
+  Set<String>? _sheetKeys;
+
+  File get _sheetsFile => File('${_root.path}/sheets.json');
+
+  List<SheetInfo> get savedSheets => List.unmodifiable(_sheets);
+
+  bool isSheetSaved(SheetInfo s) =>
+      (_sheetKeys ??= {for (final e in _sheets) e.key}).contains(s.key);
+
+  /// 翻一次收藏状态：返回 true 表示这次是收藏上了。
+  bool toggleSheet(SheetInfo s) {
+    final before = _sheets.length;
+    _sheets.removeWhere((e) => e.key == s.key);
+    final added = _sheets.length == before;
+    if (added) _sheets.insert(0, s);
+    _writeSheets();
+    return added;
+  }
+
+  List<SheetInfo> clearSheets() {
+    final old = List<SheetInfo>.of(_sheets);
+    if (old.isEmpty) return old;
+    _sheets.clear();
+    _writeSheets();
+    return old;
+  }
+
+  /// 撤销 [clearSheets]。
+  void restoreSheets(List<SheetInfo> sheets) {
+    if (sheets.isEmpty) return;
+    _sheets
+      ..clear()
+      ..addAll(sheets);
+    _writeSheets();
+  }
+
+  void _writeSheets() {
+    _sheetKeys = null;
+    notifyListeners();
+    JsonFile.write(_sheetsFile, _sheets.map((s) => s.toJson()).toList());
+  }
+
+  void _markDirty(LibraryKind kind) {
+    _dirty[kind] = true;
+    if (kind == LibraryKind.favorites) _favKeys = null;
+    notifyListeners();
+    _autosave?.cancel();
+    _autosave = Timer(const Duration(seconds: 2), _flush);
+  }
+
+  void _flush() {
+    _autosave?.cancel();
+    _autosave = null;
+    for (final kind in LibraryKind.values) {
+      if (_dirty[kind] != true) continue;
+      JsonFile.write(_file(kind), _by[kind]!.map((s) => s.toJson()).toList());
+      _dirty[kind] = false;
+    }
+  }
+
+  /// 切后台/退出前立刻落盘：2 秒防抖窗口里的收藏与最近播放不该被系统杀进程带走。
+  void flushNow() {
+    _flush();
+    _writePaths();
+    _writePlaylists();
+  }
+}

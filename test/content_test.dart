@@ -1,0 +1,174 @@
+import 'dart:convert';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lyric_music/models/results.dart';
+import 'package:lyric_music/models/song.dart';
+import 'package:lyric_music/music_sdk/wy_search.dart';
+import 'package:lyric_music/ui/pages/daily_page.dart';
+import 'package:lyric_music/ui/rank_groups.dart';
+import 'package:lyric_music/util/humanize.dart';
+
+RankInfo _r(String name) => RankInfo('wy', name, name);
+
+void main() {
+  group('groupRanks', () {
+    // 真实接口返回 60+ 个榜，这里用其中一段代表各种命名陷阱。
+    final ranks = [
+      _r('飙升榜'), _r('新歌榜'), _r('原创榜'), _r('热歌榜'),
+      _r('网易云古典榜'), _r('网易云电音榜'), _r('网易云中文说唱榜'), _r('网易云ACG榜'),
+      _r('网易云欧美热歌榜'), _r('KTV唛榜'), _r('中文慢摇DJ榜'),
+      _r('UK排行榜周榜'), _r('美国Billboard榜'), _r('日本Oricon榜'), _r('韩国Melon榜'),
+      _r('网易云韩语榜'), _r('泰语榜'), _r('越南语榜'), _r('法国 NRJ Vos Hits 周榜'),
+      _r('黑胶VIP爱听榜'), _r('网络热歌榜'), _r('黑胶VIP新歌榜'),
+      _r('喜力®星电音派对潮音榜'), _r('特斯拉车友爱听榜'), _r('实时热度榜'),
+    ];
+    final byTitle = {for (final g in groupRanks(ranks)) g.title: g.ranks.map((e) => e.name).toList()};
+
+    test('官方四大榜精确匹配，衍生榜不会被抬进主榜', () {
+      expect(byTitle['官方主榜'], ['飙升榜', '新歌榜', '原创榜', '热歌榜']);
+      expect(byTitle['风格榜'], isNot(contains('网络热歌榜')));
+      expect(byTitle['其他榜单'], containsAll(['网络热歌榜', '黑胶VIP新歌榜', '实时热度榜']));
+    });
+
+    test('风格榜只收风格，品牌活动榜留在其他', () {
+      expect(byTitle['风格榜'], containsAll(['网易云古典榜', '网易云电音榜', '网易云ACG榜', 'KTV唛榜', '中文慢摇DJ榜', '网易云欧美热歌榜']));
+      expect(byTitle['其他榜单'], containsAll(['喜力®星电音派对潮音榜', '特斯拉车友爱听榜', '黑胶VIP爱听榜']));
+    });
+
+    test('海外与语种榜单独成组', () {
+      expect(byTitle['海外榜'], containsAll(['美国Billboard榜', '日本Oricon榜', '泰语榜', '越南语榜', '网易云韩语榜', '法国 NRJ Vos Hits 周榜']));
+    });
+
+    test('空列表不产生空分组', () {
+      expect(groupRanks(const []), isEmpty);
+    });
+
+    test('首页榜单只取官方主榜', () {
+      expect(homeRanks(ranks), hasLength(4));
+      expect(homeRanks([_r('某个新榜'), _r('另一个榜')]).map((e) => e.name), ['某个新榜', '另一个榜']);
+    });
+  });
+
+  group('pickToday', () {
+    final pool = List.generate(30, (i) => Song(songmid: '$i', name: '歌$i'));
+
+    test('同一天抽到的批次固定', () {
+      final a = pickToday(pool, at: DateTime(2026, 10, 14));
+      final b = pickToday(pool, at: DateTime(2026, 10, 14));
+      expect(a.map((e) => e.songmid), b.map((e) => e.songmid));
+      expect(a, hasLength(12));
+      expect(pool.map((e) => e.songmid), List.generate(30, (i) => '$i')); // 不打乱原池
+    });
+
+    test('换一天就换一批', () {
+      final a = pickToday(pool, at: DateTime(2026, 10, 14));
+      final b = pickToday(pool, at: DateTime(2026, 10, 15));
+      expect(a.map((e) => e.songmid).toList(), isNot(equals(b.map((e) => e.songmid).toList())));
+    });
+
+    test('池子不足时原样返回', () {
+      final small = pool.take(5).toList();
+      expect(pickToday(small), hasLength(5));
+    });
+  });
+
+  group('收藏的歌单', () {
+    test('存出去取得回', () {
+      final sheet = SheetInfo('wy', '123456', '华语私享', 'https://p1.music.126.net/ab==/3.jpg',
+          '一人一票选出来的', playCount: 12345678);
+      final back = SheetInfo.fromJson(jsonDecode(jsonEncode(sheet.toJson())));
+      expect(back.source, 'wy');
+      expect(back.name, '华语私享');
+      expect(back.img, 'https://p1.music.126.net/ab==/3.jpg', reason: '== 是签名的一部分，落盘不能改写');
+      expect(back.desc, '一人一票选出来的');
+      expect(back.playCount, 12345678, reason: '卡片上的播放量不能一存一读就没了');
+    });
+
+    test('去重键带上曲库，不同源的同名 id 不会互相顶掉', () {
+      expect(SheetInfo('wy', '1', 'A', null, null).key, 'wy:1');
+      expect(SheetInfo('wy', '1', 'A', null, null).key, isNot(SheetInfo('kw', '1', 'A', null, null).key));
+    });
+  });
+
+  group('播放量写法', () {
+    test('一万以下原样，往上换成万和亿', () {
+      expect(fmtCount(9999), '9999');
+      expect(fmtCount(10000), '1万');
+      expect(fmtCount(1234567), '123.5万');
+      expect(fmtCount(1234567890), '12.3亿');
+    });
+  });
+
+  group('网易云搜索结果的读法', () {
+    // 2026-10-20 实测：老接口 `/api/search/get/web` 按出口 IP 风控，连打十几个词之后
+    // 对**所有**关键词一律回 code:405 且不带 result（「晴天」「周杰伦」也一样）；
+    // 换成网页版自己在用的 `/api/cloudsearch/pc`，匿名连打几十次全 200，结果数一致。
+    // 它给的是 v3 那套短字段名，跟老接口不是一套。
+    final cloudSong = {
+      'id': 2652820720,
+      'name': '晴天(深情版)',
+      'ar': [
+        {'id': 96154669, 'name': 'Lucky小爱', 'tns': [], 'alias': []}
+      ],
+      'al': {
+        'id': 255723258,
+        'name': '晴天(深情版)',
+        'picUrl': 'http://p1.music.126.net/x/109951173569626660.jpg'
+      },
+      'dt': 278961,
+      'fee': 8,
+    };
+
+    test('ar/al/dt 读得出来，时长换算成秒', () {
+      final song = WySearch.parseSong(cloudSong)!;
+      expect(song.songmid, '2652820720');
+      expect(song.name, '晴天(深情版)');
+      expect(song.singer, 'Lucky小爱');
+      expect(song.source, 'wy');
+      expect(song.interval, 278);
+      expect(song.pic, contains('109951173569626660'));
+    });
+
+    test('只有 fee=1 算撞墙，8 实测照样出链', () {
+      expect(WySearch.parseSong({...cloudSong, 'fee': 8})!.needsVip, isFalse);
+      expect(WySearch.parseSong({...cloudSong, 'fee': 0})!.needsVip, isFalse);
+      expect(WySearch.parseSong({...cloudSong, 'fee': 1})!.needsVip, isTrue);
+    });
+
+    test('专辑的 artist 是个空壳时，真名从 artists 里取', () {
+      // cloudsearch 的 album.artist 是 {name:'', id:0}：`??` 兜不住空串，
+      // 照原来的写法专辑行会连歌手名都不显示。
+      final album = AlbumInfo.fromNetEase({
+        'id': 372081313,
+        'name': '叶惠美',
+        'picUrl': 'https://p1.music.126.net/y/1.jpg',
+        'artist': {'name': '', 'id': 0},
+        'artists': [
+          {'name': '王珏子乔', 'id': 0}
+        ],
+        'size': 18,
+      })!;
+      expect(album.artist, '王珏子乔');
+      // id 为 0 等于没给：宁可不给歌手页入口，也别跳去一个空页。
+      expect(album.artistId, isEmpty);
+    });
+
+    test('artist 有真名真号时照旧用它', () {
+      final album = AlbumInfo.fromNetEase({
+        'id': 372081313,
+        'name': '叶惠美',
+        'artist': {'name': '周杰伦', 'id': 7},
+      })!;
+      expect(album.artist, '周杰伦');
+      expect(album.artistId, '7');
+    });
+
+    test('限流的回执算「接口没答话」，不算「没有这首歌」', () {
+      // 这几句是 WySearch._post 抛出来的原文：换源那条链子认「被限流」这个标记，
+      // 限流时不会把这首歌打上「确认没有免费版」的标（那一打就是一周）。
+      expect(looksLikeThrottle('网易云搜索被限流：code=405 且没带结果，过一会儿再试'), isTrue);
+      expect(looksLikeThrottle('网易云搜索被限流：回的不是 JSON（HTTP 200）'), isTrue);
+      expect(looksLikeThrottle('网易云搜索没有这首歌'), isFalse);
+    });
+  });
+}

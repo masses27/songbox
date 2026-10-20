@@ -1,0 +1,26 @@
+// Fix per-plugin JVM target mismatches: legacy Android plugins (e.g. flutter_js)
+// ship kotlinOptions=1.8 while their Java targetCompatibility is 11 (AGP default),
+// which Gradle 8 / AGP 8+ rejects. Sync each library subproject's Kotlin jvmTarget
+// to whatever its Java compile target ended up as.
+subprojects { sp ->
+    if (sp.path == ':app') return
+    sp.plugins.withId('com.android.library') {
+        sp.afterEvaluate {
+            def target = null
+            def javaTask = sp.tasks.findByName('compileDebugJavaWithJavac')
+            if (javaTask != null) {
+                try { target = javaTask.targetCompatibility?.toString() } catch (ignored) {}
+            }
+            if (target == null) {
+                def android = sp.extensions.findByName('android')
+                try { target = android?.compileOptions?.targetCompatibility?.toString() } catch (ignored) {}
+            }
+            if (target == null) return
+            sp.tasks.matching { it.class.name.contains('KotlinCompile') }.configureEach { t ->
+                try {
+                    t.kotlinOptions.jvmTarget = target
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+}
