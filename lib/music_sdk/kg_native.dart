@@ -8,6 +8,8 @@ import 'package:dio/dio.dart';
 import 'package:pointycastle/export.dart' as pc;
 import 'package:pointycastle/asymmetric/api.dart' as pca;
 
+import '../models/song.dart';
+
 /// 酷狗一次请求的原始回执：HTTP 码、业务码、验证标识、拿到的播放地址、响应原文。
 /// 自检页要的是「服务器到底回了什么」，所以这里一律不翻译成人话。
 typedef KgReply = ({
@@ -17,14 +19,21 @@ typedef KgReply = ({
   String error,
   String? ssaCode,
   String? url,
+  int? bitRate,
+  int? fileSize,
+  String ext,
   String raw,
 });
 
 /// 酷狗概念版（appid 3116）端内直连：匿名设备注册 + 歌曲取链。
 ///
-/// 现在只服务于「音源自检」那一页。办公网上每次取链都回 `errcode 20028 本次请求需要验证`
-/// （响应头带 `ssa-code: gz_tx_event_…`），那是酷狗的行为验证，要 App 里那段 WASM 滑块
-/// 才能过。但它按 IP 和频率决定弹不弹，家里宽带和蜂窝上未必弹——这个只能在手机上跑一次。
+/// 这里有两套取链，走的门不一样：
+/// - [probeUrl] 打 `gateway.kugou.com/v5/url`，要注册设备、要 signature。办公网上每次
+///   都回 `errcode 20028 本次请求需要验证`（响应头带 `ssa-code: gz_tx_event_…`），那是
+///   酷狗的行为验证，要 App 里那段 WASM 滑块才能过。它按 IP 和频率决定弹不弹，家里宽带
+///   和蜂窝上未必弹——这个只能在手机上跑一次。
+/// - [resolveUrl] 打 `trackercdn.kugou.com/i/v2`，不注册、不签名、不要 cookie，
+///   key 只是 md5(哈希 + 'kgcloudv2')。**这一条 0.8.26 接进了播放**，见下面注释。
 class KgNative {
   static const _appid = 3116;
   static const _clientver = 11440;
@@ -126,8 +135,11 @@ class KgNative {
     return _reply(resp, json.json, raw: json.plain);
   }
 
-  /// 搜索。这个接口不要签名，匿名就能问；`pay` 是酷狗的付费标记，0 表示免费。
-  static Future<List<({String name, String singer, String hash, int pay})>> search(
+  /// 匿名搜索（`songsearch.kugou.com`）：这条一直通，被拦的只是 v5/url 那一步。
+  ///
+  /// `priv` 取的是搜索结果的 `Privilege`（付费判断见 [isPaid]），`sec` 是时长——
+  /// 拿它对上「是不是同一首歌」，也挡掉那些几十分钟的合集。
+  static Future<List<({String name, String singer, String hash, int priv, int sec})>> search(
     String keyword, {
     int limit = 8,
   }) async {
@@ -143,7 +155,7 @@ class KgNative {
     final lists = _plainJson(resp)['data'];
     final items = lists is Map ? lists['lists'] : null;
     if (items is! List) return const [];
-    final out = <({String name, String singer, String hash, int pay})>[];
+    final out = <({String name, String singer, String hash, int priv, int sec})>[];
     for (final e in items.whereType<Map>()) {
       final hash = '${e['FileHash'] ?? ''}';
       if (hash.isEmpty) continue;
@@ -152,13 +164,74 @@ class KgNative {
         name: '${e['OriSongName'] ?? e['SongName'] ?? ''}',
         singer: singers,
         hash: hash,
-        pay: _int(e['PayMask']) ?? 0,
+        priv: _int(e['Privilege']) ?? 0,
+        sec: _int(e['Duration']) ?? 0,
       ));
     }
     return out;
   }
 
-  /// 取一条播放地址。`code:20028`＝要行为验证；`status:1` 且 url 非空＝这首歌能给整首。
+  /// 搜索结果里的付费标记。`Privilege>=10` 就是要会员：抽样九条候选零例外
+  /// （0 和 8 的匿名直链给整首，10 的一律回 `status:2`）。
+  /// 这个数比 `PayMask` 可靠——后者在这套查询参数下根本不回，以前解析出来的永远是 0。
+  static bool isPaid(int priv) => priv >= 10;
+
+  /// 搜索结果换成队列里用得上的 [Song]：哈希放 `songmid`（取链就认它），
+  /// `Privilege>=10` 写成 `fee:1`，让 [Song.twinBlocked] 那道关在挑候选时就把会员歌筛掉。
+  static Future<List<Song>> searchSongs(String keyword, {int limit = 8}) async =>
+      (await search(keyword, limit: limit))
+          .map((e) => Song(
+                source: 'kg',
+                songmid: e.hash,
+                name: e.name,
+                singer: e.singer,
+                interval: e.sec > 0 ? e.sec : null,
+                fee: isPaid(e.priv) ? 1 : 0,
+              ))
+          .toList();
+
+  /// 匿名整首直链的取链地址。
+  ///
+  /// key 只有一条规则：md5(哈希 + 'kgcloudv2')，**哈希用哪一串写进 url，就签哪一串**。
+  /// 全大写、全小写都回 `status:1`，一大写一小写回 `status:0 Bad key`——所以这里固定转大写，
+  /// 免得调用方传了小写哈希、又拿小写去签，看着「搜索明明通、取链就是不给」。
+  static const _directSalt = 'kgcloudv2';
+
+  static String directApiUrl(String hash) {
+    final h = hash.toUpperCase();
+    return 'https://trackercdn.kugou.com/i/v2/?appid=1005&pid=2&cmd=25&behavior=play'
+        '&hash=$h&key=${_md5('$h$_directSalt')}';
+  }
+
+  /// 直链取链的原始回执，给自检页摆证据用：`status`、`bitRate`、`fileSize` 都是从这次请求读的。
+  static Future<KgReply> probeDirect(String hash) async {
+    final resp = await _dio.get(directApiUrl(hash), options: Options(headers: {'User-Agent': _ua}));
+    final json = _plainJson(resp);
+    final urls = (json['url'] as List?)?.whereType<String>().where((u) => u.isNotEmpty).toList() ??
+        const <String>[];
+    return _reply(resp, json, url: urls.isEmpty ? null : urls.first);
+  }
+
+  /// 播放要的那条整首 mp3 地址。
+  static Future<String> resolveUrl(String hash) async => urlOrExplain(await probeDirect(hash));
+
+  /// 直链回执拆成「地址」或者一句说清为什么没有地址。单独抽出来是让单测能钉住归因——
+  /// 这几种失败在她那边是三条不同的路：要会员→换版本，返回异常→过会儿再试，
+  /// `Bad key`→是我们签错了串。归因错了，代价是白等或者错打七天的标记。
+  static String urlOrExplain(KgReply reply) {
+    final url = reply.url;
+    if (url != null && url.isNotEmpty) return url;
+    // 没有 status = 答的不是那个 JSON（风控页、空 body、网关直接拦回）。这首歌有没有版权
+    // 跟这一下没关系，所以说成「返回异常」让换源链子把它算进 flaky：
+    // 不然一次拦截就打成「这首确认没有免费版」，标记一落就是七天。
+    if (reply.status == null) throw Exception('酷狗直链返回异常（HTTP ${reply.http}）');
+    if (reply.status == 2) throw Exception('酷狗这首也要会员（status:2）');
+    if (reply.status == 0) throw Exception(reply.error.isEmpty ? '酷狗不认这个 key' : reply.error);
+    throw Exception('酷狗没给地址（status ${reply.status}）');
+  }
+
+  /// v5/url 那条（要注册、要签名、要过行为验证）——0.8.26 之后它不再参与播放，
+  /// 只留给自检页量一次「这台机、这个出口，酷狗到底弹不弹验证」。`code:20028`＝要行为验证。
   static Future<KgReply> probeUrl(String hash, {String quality = '128'}) async {
     final h = hash.toLowerCase();
     final params = <String, dynamic>{
@@ -241,6 +314,9 @@ class KgNative {
       error: '${json['error'] ?? json['error_msg'] ?? ''}',
       ssaCode: resp.headers.value('ssa-code'),
       url: url,
+      bitRate: _int(json['bitRate']),
+      fileSize: _int(json['fileSize']),
+      ext: '${json['extName'] ?? ''}',
       raw: text.length > 240 ? '${text.substring(0, 240)}…' : text,
     );
   }

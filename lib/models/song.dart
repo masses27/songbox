@@ -20,7 +20,8 @@ class Song {
 
   /// 网易云的版权标记。实测：fee=1 的歌端内直连 128k/320k/flac 三档全部拿不到链接，
   /// fee=0 和 8 则都能出——所以这一个数字就够判断「这首十有八九要换版本」。
-  /// 其他曲库没有这个字段，留 0 表示未知/免费。
+  /// QQ 用 payplay、酷狗用搜索里的 `Privilege>=10` 各自折算成同一个 1；
+  /// 酷我等其他曲库没有可靠的标记，留 0 表示未知/免费。
   final int fee;
   Map<String, SongQuality> _types;
 
@@ -46,8 +47,10 @@ class Song {
   bool get needsVip => fee == 1 && source == 'wy';
 
   /// 换源时这条候选本身就被付费墙挡着。网易云 fee=1 要会员，腾讯 payplay=1 同样要
-  /// 会员（实测匿名取链回 result:104003）；酷我的付费标记不可靠，交给取链去判断。
-  bool get twinBlocked => fee == 1 && (source == 'wy' || source == 'tx');
+  /// 会员（实测匿名取链回 result:104003）；酷狗用搜索里的 `Privilege>=10` 判（见
+  /// KgNative.search，匿名直链对这种歌一律回 `status:2`）。酷我的付费标记不可靠，
+  /// 交给取链去判断。
+  bool get twinBlocked => fee == 1 && (source == 'wy' || source == 'tx' || source == 'kg');
 
   /// 把明显是分支版本的排到最后，其余顺序原样保留（榜单名次、搜索相关度）。
   ///
@@ -152,8 +155,8 @@ class Song {
 
 /// 这一首在这台手机上**实际**能听到的档位。
 ///
-/// 设置里那一档是「想要」，不是「拿得到」：匿名出整首的那两条各有上限
-/// （B 站 192k、QQ 128k），会员墙后面靠它们兜底的歌永远到不了无损。以前播放页
+/// 设置里那一档是「想要」，不是「拿得到」：匿名出整首的那几条各有上限
+/// （B 站 192k，QQ、酷狗只有 128k），会员墙后面靠它们兜底的歌永远到不了无损。以前播放页
 /// 和下载弹窗都直接写设置值，于是「无损 flac · 免费版」挂在耳朵是 192k 那儿 ——
 /// 换源本来就看不见摸不着，标注再骗人，她更不会信这功能是真是的。
 /// 预取也把这一档写进文件名：按设置值存的话，B 站那首歌在无损和 320k 两个键下
@@ -161,10 +164,24 @@ class Song {
 String heardQuality(String wanted, String source) {
   final cap = switch (source) {
     'bl' => '192k',
-    'tx' => '128k',
+    'tx' || 'kg' => '128k',
     _ => null,
   };
   if (cap == null) return wanted;
   const order = ['128k', '192k', '320k', 'flac'];
   return order.indexOf(cap) < order.indexOf(wanted) ? cap : wanted;
 }
+
+/// 来源码给人看的名字。这是**唯一**一份对照表：
+/// 界面（`sourceLabel`）、取链失败台账（`BuiltinLibrary._twinLabel`）、撞墙那句
+/// （`_wallHome`）都从这里念，接一个新平台只改这一处。
+/// 各写一份的后果已经栽过：日志前缀漏出「换源 bl：」这种半成品，
+/// 或者新平台的名字永远读不出来。
+String sourceName(String source) => switch (source) {
+      'wy' => '网易云',
+      'kw' => '酷我',
+      'tx' => 'QQ',
+      'bl' => 'B 站',
+      'kg' => '酷狗',
+      _ => source,
+    };

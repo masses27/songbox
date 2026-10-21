@@ -134,7 +134,7 @@ class _SourcesPageState extends State<SourcesPage> {
             if (engine != null && engine.inited)
               _statusCard('当前音源：${engine.support?.sources.join('、') ?? ''}', true)
             else
-              _statusCard('网易云、QQ、B 站的歌端内直连就能放，这一页可以先不管；'
+              _statusCard('网易云、QQ、B 站、酷狗的歌端内直连就能放，这一页可以先不管；'
                   '音源只是多接几个曲库的入口', false),
             const SizedBox(height: 12),
             _sectionHeader(

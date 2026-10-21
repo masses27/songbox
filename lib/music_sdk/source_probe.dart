@@ -11,14 +11,14 @@ import 'wy_search.dart';
 
 /// 一条自检结论。ok 决定绿勾还是感叹号，message 给人看，raw 留着服务器原话。
 ///
-/// `warn` 是「这一行不通，但它本来就用不上」：音源脚本只覆盖酷我、酷狗被行为验证
-/// 拦下都属于这类。跟「坏了」共用一个红色图标，她就会去修一个不需要修的东西。
+/// `warn` 是「这一行不通，但它本来就用不上」：音源脚本只覆盖酷我、对照曲本身在酷狗
+/// 也是付费的，都属于这类。跟「坏了」共用一个红色图标，她就会去修一个不需要修的东西。
 typedef ProbeResult = ({String label, bool ok, bool warn, String message, String raw});
 
-/// 手机端音源自检：网易云、QQ、音源脚本、酷狗概念版各问一次。
+/// 手机端音源自检：网易云、QQ、音源脚本、B 站、酷狗各问一次。
 ///
-/// 每台网络出去看到的墙不一样——酷狗的行为验证按 IP 和频率弹，公司网拦得死、
-/// 家里宽带未必拦；音源脚本的接口也有地区限流。电脑上测出来的结论搬不过去，
+/// 每台网络出去看到的墙不一样——酷狗的行为验证按 IP 和频率弹（那条老通道现在不参与播放，
+/// 只留个测量值），音源脚本的接口也有地区限流。电脑上测出来的结论搬不过去，
 /// 所以这一页把每个源的原始回执摊在手机上，跑一次十几秒。
 class SourceProbe {
   /// 各曲库都有这首歌，拿它当正向对照。
@@ -44,7 +44,7 @@ class SourceProbe {
           return (
             label: '网易云 端内直连',
             ok: true, warn: false,
-            message: '「${pick.name}」$quality 出链成功（全程匿名，会员歌靠 B 站整首）',
+            message: '「${pick.name}」$quality 出链成功（全程匿名，会员歌靠 B 站、酷狗整首）',
             raw: _tail(url),
           );
         } catch (e) {
@@ -124,7 +124,7 @@ class SourceProbe {
     }
   }
 
-  /// 音源脚本那一层：网易云、QQ、B 站现在都走端内直连，脚本只是给酷我这类
+  /// 音源脚本那一层：网易云、QQ、B 站、酷狗现在都走端内直连，脚本只是给酷我这类
   /// 别的入口覆盖不到的曲库兜底。
   ///
   /// 关键是把「不通」和「用不上」分开说：市面上的脚本九成只覆盖 kw，而 kw 的取链
@@ -141,7 +141,7 @@ class SourceProbe {
     if (engine == null || !engine.inited) {
       return _bad(
         '音源脚本',
-        '没启用。只听网易云、QQ、B 站用不上这一层，不用管',
+        '没启用。只听网易云、QQ、B 站、酷狗用不上这一层，不用管',
         engine?.initError ?? '未启用',
         warn: true,
       );
@@ -170,7 +170,7 @@ class SourceProbe {
         '音源脚本',
         inert
             ? '这个脚本只覆盖酷我，而酷我那条取链接口已经废了 —— '
-                '现在听歌走的是端内直连和 B 站，这一行不用管'
+                '现在听歌走的是端内直连和 B 站、酷狗，这一行不用管'
             : '脚本取链失败（覆盖：$sources）：${_short(e)}',
         '$e',
         warn: inert,
@@ -178,7 +178,7 @@ class SourceProbe {
     }
   }
 
-  /// B 站那一档：会员墙后面唯一还肯匿名给整首的源，所以它自己占一行。
+  /// B 站那一档：会员墙后面第一条匿名整首路（192k），所以它自己占一行。
   ///
   /// 这一行量的是「这台机子上 B 站能不能搜到、能不能出链」，对照曲用《晴天》——
   /// 它在网易云是要会员的那一首，正是这条路要救的那种歌。269 秒是网易云那首的时长，
@@ -202,41 +202,79 @@ class SourceProbe {
     }
   }
 
-  /// 酷狗概念版：注册设备 → 搜索 → 取链，把每一步的码都留下。
-  /// 关心的是取链那一步会不会回 `20028 本次请求需要验证`。
+  /// 酷狗那一行：0.8.26 起它是会员墙后面的第二条整首路（匿名 128k），所以量的是
+  /// 播放真正走的那条 `trackercdn` 直链，而不是当年结案用的 `v5/url`。
+  ///
+  /// 旧通道不参与播放，但「这台机子、这个出口到底拦不拦」只有她手机上测得出来，
+  /// 所以顺手量一行留在原始回执里当证据，不影响绿勾。
   static Future<ProbeResult> kugou() async {
+    const label = '酷狗 整首直链';
     KgNative.resetDevice();
     try {
-      final found = await KgNative.search(keyword);
-      if (found.isEmpty) return _bad('酷狗 概念版', '搜索没有返回结果', '曲库接口这次没答话');
-      final pick = found.firstWhere((s) => s.pay == 0, orElse: () => found.first);
-      final reg = await KgNative.register();
-      final probe = await KgNative.probeUrl(pick.hash);
-      final raw = '注册 HTTP ${reg.http} ${_tail(reg.raw, 120)}\n取链 HTTP ${probe.http} ${_tail(probe.raw, 160)}'
-          '${probe.ssaCode == null ? '' : '\nssa-code ${probe.ssaCode}'}';
-      if (probe.url != null && probe.url!.isNotEmpty) {
-        return (
-          label: '酷狗 概念版',
-          ok: true,
-          warn: false,
-          message: '「${pick.name}」出链成功',
-          raw: raw,
+      final found = await KgNative.search(keyword, limit: 10);
+      if (found.isEmpty) return _bad(label, '搜索没有返回结果', '曲库接口这次没答话');
+      // Privilege>=10 的在酷狗也要会员，匿名直链一定回 status:2，拿它测不出平台通不通。
+      final free = found.where((s) => s.priv < 10).take(2).toList();
+      if (free.isEmpty) {
+        return _bad(
+          label,
+          '搜到 ${found.length} 条，全都标着要会员（Privilege>=10）：这一首看不出平台通不通',
+          '关键词：$keyword',
+          warn: true,
         );
       }
-      final gate = probe.code == 20028 || probe.code == 30020;
-      // 酷狗这条最后没接进播放（取链一律被行为验证拦下，见结案记录），所以这一行
-      // 只是留个测量值：不通是她没法修、也不需要修的事。
+      final tries = <String>[];
+      ({String name, KgReply reply})? hit;
+      for (final pick in free) {
+        final r = await KgNative.probeDirect(pick.hash);
+        tries.add('「${pick.name}」HTTP ${r.http} status=${r.status ?? '-'} ${r.error}');
+        // 出一条就够了：这一行看的是「这条路通不通」，第二次问同一接口只是把
+        // 出口 IP 的额度再花掉一遍（整单体检并发的时候尤其经不起）。
+        if (r.url != null && r.url!.isNotEmpty) {
+          hit = (name: pick.name, reply: r);
+          break;
+        }
+      }
+      final legacy = await _kgLegacy(free.first.hash);
+      if (hit != null) {
+        final r = hit.reply;
+        final mb = r.fileSize == null ? '' : ' · ${(r.fileSize! / 1048576).toStringAsFixed(1)} MB';
+        return (
+          label: label,
+          ok: true,
+          warn: false,
+          message: '「${hit.name}」出链成功，${r.bitRate == null ? '128k' : '${r.bitRate! ~/ 1000}k'}'
+              '$mb（匿名整首，上限 128k）',
+          raw: '${tries.join('\n')}\n${_tail(hit.reply.url ?? '', 120)}\n$legacy',
+        );
+      }
+      // status:2 = 直链答了话、只是这首不给免费整首；那是对照曲的问题，不是这条路坏了。
+      final paid = tries.any((t) => t.contains('status=2'));
       return _bad(
-        '酷狗 概念版',
-        gate
-            ? '搜索、注册都通，取链被行为验证拦下（errcode ${probe.code}）；'
-                '这一家本来就没接进播放，不用管'
-            : '取链没成功（errcode ${probe.code ?? '未知'}）；这一家本来就没接进播放，不用管',
-        raw,
-        warn: true,
+        label,
+        paid
+            ? '搜索、直链都通，可标着免费的那几首其实也要会员（status:2）：换个网络再跑一次看看'
+            : '搜索通，直链没给地址：${tries.join(' / ')}',
+        '已试：\n${tries.join('\n')}\n$legacy',
+        warn: paid,
       );
     } catch (e) {
-      return _bad('酷狗 概念版', '请求没发出去：${_short(e)}', '$e');
+      return _bad(label, '请求没发出去：${_short(e)}', '$e');
+    }
+  }
+
+  /// 旧通道（注册设备 → `v5/url`）量一行结论。`errcode 20028` 就是要行为验证。
+  static Future<String> _kgLegacy(String hash) async {
+    try {
+      final reg = await KgNative.register();
+      final probe = await KgNative.probeUrl(hash);
+      final gate = probe.code == 20028 || probe.code == 30020
+          ? '要行为验证'
+          : 'errcode ${probe.code ?? '未知'}';
+      return '旧通道 v5/url（不参与播放）：注册 HTTP ${reg.http}，取链 HTTP ${probe.http} $gate'
+          '${probe.ssaCode == null ? '' : ' ssa-code ${probe.ssaCode}'}';
+    } catch (e) {
+      return '旧通道 v5/url（不参与播放）：没跑起来 ${_short(e)}';
     }
   }
 

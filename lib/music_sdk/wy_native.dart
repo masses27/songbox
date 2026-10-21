@@ -36,7 +36,7 @@ class WyNative {
 
   /// Returns a directly playable mp3 url, or throws for VIP-only tracks.
   /// 会员歌在匿名请求下回 `code: -110`（实测：`url:null`、`freeTrialInfo:null`、
-  /// `payed:0`）——网易云这一层不再放会员曲目，整首由 B 站那一档兜。
+  /// `payed:0`）——网易云这一层不再放会员曲目，整首由 B 站、酷狗那两档兜。
   static Future<String> resolveUrl(String id, {String quality = '320k'}) async {
     final body = await weapi({
       'ids': [id],

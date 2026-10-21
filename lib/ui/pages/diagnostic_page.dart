@@ -22,7 +22,7 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
     (label: 'QQ 端内直连', run: SourceProbe.tencent),
     (label: '音源脚本', run: SourceProbe.lxSource),
     (label: 'B 站 整首兜底', run: SourceProbe.bilibili),
-    (label: '酷狗 概念版', run: SourceProbe.kugou),
+    (label: '酷狗 整首直链', run: SourceProbe.kugou),
   ];
 
   final _results = <String, ProbeResult>{};

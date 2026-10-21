@@ -61,9 +61,20 @@ void main() {
       final txVip = Song(source: 'tx', songmid: 'a', name: 'x', fee: 1);
       expect(txVip.twinBlocked, isTrue);
       expect(txVip.needsVip, isFalse);
-      // 酷我没有可靠的付费标记，B 站匿名本来就出整首：都别乱标。
+      // 酷我的付费标记不可靠，B 站匿名本来就出整首：都别乱标。
       expect(Song(source: 'kw', songmid: 'a', name: 'x', fee: 1).twinBlocked, isFalse);
       expect(Song(source: 'bl', songmid: 'BV1', name: 'x', fee: 1).twinBlocked, isFalse);
+    });
+
+    test('酷狗用 Privilege 折算成同一个 fee=1，也算挡在墙后', () {
+      // 0.8.26 接酷狗匿名整首时最容易漏的一刀：它的搜索直接写 fee，
+      // 而「候选本身要会员就别当换源目标」那道关（pickTwins）认的是 twinBlocked。
+      // 漏了 kg，付费的酷狗候选会挤掉免费的那条，还会在墙前多跑一次取链。
+      final kgVip = Song(source: 'kg', songmid: 'H1', name: 'x', fee: 1);
+      expect(kgVip.twinBlocked, isTrue);
+      // 端内直连那句「VIP 专属」只属于网易云，酷狗的要留着自己的归因。
+      expect(kgVip.needsVip, isFalse);
+      expect(Song(source: 'kg', songmid: 'H2', name: 'x', fee: 0).twinBlocked, isFalse);
     });
   });
 
@@ -166,6 +177,35 @@ void main() {
     test('B 站匿名整首只有 192k，问第二遍是把同一条接口再打一次', () {
       expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'bl'), 'flac'), ['192k']);
       expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'bl'), '128k'), ['192k']);
+    });
+
+    test('酷狗匿名整首只有 128k，同理只问一次', () {
+      // 搜索回的那个哈希就是 128k 那一份文件：按设置里的无损去问，
+      // 多出来的那一次只是整单体检里多撞一遍酷狗的频率限制。
+      expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'kg'), 'flac'), ['128k']);
+      expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'kg'), '320k'), ['128k']);
+    });
+  });
+
+  group('撞墙那句话点名的兜底名单', () {
+    // 提示条上只有这一句是她能看见的：照着它决定要不要开会员、要不要换版本，
+    // 所以名单里既不能漏掉新接进来的那家，也不能把撞墙的本家自己算成一条路。
+    test('网易云、QQ 撞墙时说清还剩谁会兜整首', () {
+      expect(
+          BuiltinLibrary.wallMessage(_s('晴天', '周杰伦', source: 'wy', fee: 1), what: '同一首'),
+          '网易云这首要会员，B 站、酷狗和别的源上也没找到同一首');
+      expect(BuiltinLibrary.wallMessage(_s('晴天', '周杰伦', source: 'tx', fee: 1), what: '同一首'),
+          'QQ这首要会员，B 站、酷狗和别的源上也没找到同一首');
+    });
+
+    test('直接点酷狗那一首撞墙时，不能把自己列进兜底名单', () {
+      // 她从「找其他版本」里挑了带角标的酷狗条目，队列里这一首的 source 就是 kg。
+      // 照原来那句硬写，会变成「酷狗这首要会员，B 站、酷狗和别的源上也没找到」——
+      // 读起来像还有第二条酷狗的路，而那条候选本来就是它自己。
+      final msg =
+          BuiltinLibrary.wallMessage(_s('晴天', '周杰伦', source: 'kg', fee: 1), what: '同一首');
+      expect(msg, '酷狗这首要会员，B 站和别的源上也没找到同一首');
+      expect(RegExp('酷狗').allMatches(msg).length, 1);
     });
   });
 

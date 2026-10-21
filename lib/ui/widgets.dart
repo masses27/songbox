@@ -16,13 +16,8 @@ import 'theme.dart';
 /// Shared NetEase-Cloud-Music-style building blocks.
 
 /// 来源码给人看的名字。界面上到处是 wy/kw，用户没见过的只会当成乱码。
-String sourceLabel(String source) => switch (source) {
-      'wy' => '网易云',
-      'kw' => '酷我',
-      'tx' => 'QQ',
-      'bl' => 'B 站',
-      _ => source,
-    };
+/// 对照表在 `sourceName`（models/song.dart），跟取链失败台账共用一份。
+String sourceLabel(String source) => sourceName(source);
 
 /// Rounded pill search bar shown at the top of 首页/发现.
 class NetEaseSearchBar extends StatelessWidget {
@@ -680,7 +675,7 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
                 widget.song.twinBlocked
-                    ? '这首在${widget.song.source == 'tx' ? 'QQ 上' : '网易云上'}要会员。'
+                    ? '这首在${sourceName(widget.song.source)}上要会员。'
                         '下面是同一首歌的其他录音，点一下就用它顶上。'
                     : '现场版、翻唱、别的平台的同名。点一下换掉当前这首。',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),

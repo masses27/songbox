@@ -215,7 +215,7 @@ class SettingsPage extends StatelessWidget {
             title: const Text('关于'),
             subtitle: Text('听歌小窝 v${AppSettings.appVersion}\n'
                 '网易云、QQ 的歌在端内直连播放，全程匿名，不需要登录任何账号；'
-                '会员专享的会自动换成 B 站同一首的整首；'
+                '会员专享的会自动换成 B 站、酷狗同一首的整首；'
                 '「音源管理」只是多接几个曲库的入口，不启用也能听。',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
           ),
