@@ -306,7 +306,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       _resumeKey = LibraryStore.keyOf(song);
       AppLog.add('播', '「${_t(song)}」在第 ${_mm(pos)} 断流，记住位置等重连');
       _urlStaler?.call(song, AppSettings.instance.quality);
-      AudioPrefetch.instance.drop(song, AppSettings.instance.quality);
+      AudioPrefetch.instance.drop(song);
       if (_retryOnStreamDrop(_generation)) return;
     }
     // 从头就没打开过：手上这条地址本身是坏的（签名过期、被 CDN 拦下、换源记住的
@@ -329,7 +329,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     if (LibraryStore.instance.hasLocalFile(song)) return false;
     LibraryStore.instance.forgetSwapSong(song);
     _urlStaler?.call(song, AppSettings.instance.quality);
-    AudioPrefetch.instance.drop(song, AppSettings.instance.quality);
+    AudioPrefetch.instance.drop(song);
     // 一次播放只自动重来这一回：那 5/15/30/60 秒的等待是给断网留的，
     // 一条打不开的地址等再久也不会自己变好，重取才是对症的那一步。
     if (_sourceRetryGen == _generation) return false;
@@ -378,7 +378,8 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     final gen = ++_vipScanGen;
     // 从当前这首往后排：离播放位置越近越先查，被上限砍掉的该是最远的那些。
     final ordered = [...songs.sublist(from), ...songs.sublist(0, from)];
-    final todo = ordered.where((s) => s.needsVip).take(_vipScanMax).toList();
+    // 排除了 QQ 的会员歌就等于漏掉一整批：它们撞的是同一堵墙，也靠同一条换源链子救。
+    final todo = ordered.where((s) => s.twinBlocked).take(_vipScanMax).toList();
     if (todo.isEmpty) return;
     _vipScanTail = _vipScanTail.then((_) async {
       // 排队期间她可能又换了队列，这一轮整批作废。
@@ -565,13 +566,18 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     final resolver = _urlResolver;
     if (resolver == null) throw Exception('播放组件还没就绪，请重启应用');
     final quality = AppSettings.instance.quality;
-    final pre = await AudioPrefetch.instance.path(song, quality);
+    // 档位按这条歌真正由哪个平台出声来算：换到 B 站的歌，磁盘上那份是 192k，
+    // 拿设置里的无损去查永远查不到，白在线下一遍。
+    final servedBy = LibraryStore.instance.swapSongFor(song)?.source;
+    final pre = await AudioPrefetch.instance.path(song, quality, servedBy: servedBy);
     if (pre != null) {
-      _how = '提前备好的 $quality';
+      _how = '提前备好的 ${heardQuality(quality, servedBy ?? song.source)}';
       return AudioSource.file(pre, tag: _mediaItem(song));
     }
     final url = await resolver(song, quality);
-    _how = '现取 $quality';
+    // 日志里那一档要和播放页上的是同一句话：换到 B 站的歌写「现取无损」，
+    // 对着日志排查时先把人带偏。
+    _how = '现取 ${heardQuality(quality, LibraryStore.instance.swapSongFor(song)?.source ?? song.source)}';
     // 防盗链头按拿到的这条地址判，不按 `song.source`：换源给的是 B 站的音轨，
     // 队列里那一首却还写着网易云（不带 Referer 实测三成就 403）。
     return AudioSource.uri(Uri.parse(url), headers: BlSource.headersFor(url), tag: _mediaItem(song));
@@ -735,13 +741,19 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     for (var n = 0; n < upcoming.length; n++) {
       final s = queue[upcoming[n]];
       // 预取失败不做任何处理：真轮到它播放时还有一条完整重试的路。
-      if (LibraryStore.instance.localFile(s) == null && !AudioPrefetch.instance.has(s, quality)) {
+      // 问「备过没」要按这条歌真正的出声平台问：B 站那份存的是 192k 的键，
+      // 拿设置里的无损去问永远问不出，每轮切歌都重新下一遍同样的字节。
+      final servedBy = LibraryStore.instance.swapSongFor(s)?.source;
+      if (LibraryStore.instance.localFile(s) == null &&
+          !AudioPrefetch.instance.has(s, quality, servedBy: servedBy)) {
         // 亮屏时只整首备下一首：更靠后的随时会被跳过，白下不如不下。
         // 人已经走了（息屏/切走）就两首都备——后台网络随时会被省电策略掐掉，
         // 磁盘上有货才听得出「还在放歌」。
         final deep = _background ? upcoming.length : 1;
         if (n < deep) {
-          unawaited(url(s, quality).then((u) => AudioPrefetch.instance.warm(s, quality, u)).catchError((_) {}));
+          unawaited(url(s, quality).then((u) => AudioPrefetch.instance.warm(
+              s, quality, u,
+              servedBy: LibraryStore.instance.swapSongFor(s)?.source ?? servedBy)).catchError((_) {}));
         }
       }
       unawaited(lyric(s).catchError((_) => LyricResult(lyric: '')));

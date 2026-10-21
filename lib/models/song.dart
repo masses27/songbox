@@ -149,3 +149,22 @@ class Song {
   static List<Song> listFromJson(dynamic arr) =>
       (arr as List?)?.map((e) => Song.fromJson(Map<String, dynamic>.from(e))).toList() ?? [];
 }
+
+/// 这一首在这台手机上**实际**能听到的档位。
+///
+/// 设置里那一档是「想要」，不是「拿得到」：匿名出整首的那两条各有上限
+/// （B 站 192k、QQ 128k），会员墙后面靠它们兜底的歌永远到不了无损。以前播放页
+/// 和下载弹窗都直接写设置值，于是「无损 flac · 免费版」挂在耳朵是 192k 那儿 ——
+/// 换源本来就看不见摸不着，标注再骗人，她更不会信这功能是真是的。
+/// 预取也把这一档写进文件名：按设置值存的话，B 站那首歌在无损和 320k 两个键下
+/// 各存一份同样的字节，改一次设置就重下一遍。
+String heardQuality(String wanted, String source) {
+  final cap = switch (source) {
+    'bl' => '192k',
+    'tx' => '128k',
+    _ => null,
+  };
+  if (cap == null) return wanted;
+  const order = ['128k', '192k', '320k', 'flac'];
+  return order.indexOf(cap) < order.indexOf(wanted) ? cap : wanted;
+}

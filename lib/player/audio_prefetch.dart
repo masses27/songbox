@@ -43,11 +43,18 @@ class AudioPrefetch {
   Directory? _dir;
   Future<void>? _scan;
 
-  static String key(Song song, String quality) => 'pf-${song.source}-${song.songmid}-$quality';
+  /// 键里那一档写的是「实际能拿到的」，不是设置里想要的那一档。
+  ///
+  /// B 站整首只有 192k、QQ 匿名只有 128k：按设置值命名的话，同一份字节会在
+  /// `flac` 和 `320k` 两个键下各存一遍，她改一次音质设置就白下一首。
+  /// `servedBy` 是这条音频真正来自的平台（换源记住的那个版本），没说就按队列里
+  /// 那个 source 算。
+  static String key(Song song, String quality, {String? servedBy}) =>
+      'pf-${song.source}-${song.songmid}-${heardQuality(quality, servedBy ?? song.source)}';
 
   /// 已经下好的完整文件；没有返回 null。
-  Future<String?> path(Song song, String quality) async {
-    final k = key(song, quality);
+  Future<String?> path(Song song, String quality, {String? servedBy}) async {
+    final k = key(song, quality, servedBy: servedBy);
     final hit = _done[k];
     if (hit != null) return hit;
     await _prime();
@@ -71,12 +78,13 @@ class AudioPrefetch {
   }
 
   /// 内存表里已经有整首了？批量预取用这个问，别为每首歌都 await 一次磁盘扫描。
-  bool has(Song song, String quality) => _done.containsKey(key(song, quality));
+  bool has(Song song, String quality, {String? servedBy}) =>
+      _done.containsKey(key(song, quality, servedBy: servedBy));
 
   /// 拿到链接后开始后台下载。已在下、已下好、或设置里关了预取就直接返回。
-  void warm(Song song, String quality, String url) {
+  void warm(Song song, String quality, String url, {String? servedBy}) {
     if (url.isEmpty || !AppSettings.instance.preloadNext) return;
-    final k = key(song, quality);
+    final k = key(song, quality, servedBy: servedBy);
     if (_done.containsKey(k) || _running.containsKey(k)) return;
     final token = CancelToken();
     _running[k] = token;
@@ -86,9 +94,17 @@ class AudioPrefetch {
   }
 
   /// 这一首放着放着失败了：本地那份可能是半截坏文件，扔掉让下次重新取。
-  void drop(Song song, String quality) {
-    final p = _done.remove(key(song, quality));
-    if (p != null) _deleteLater(File(p));
+  /// 整首按前缀扔，不猜档位——换源关系往往就在这一步被清掉，档位跟着变，
+  /// 只删「设置里那一档」的话 B 站那份 192k 会留在磁盘上被接着放。
+  void drop(Song song) {
+    final prefix = 'pf-${song.source}-${song.songmid}-';
+    for (final k in _done.keys.where((k) => k.startsWith(prefix)).toList()) {
+      final p = _done.remove(k);
+      if (p != null) _deleteLater(File(p));
+    }
+    for (final k in _running.keys.where((k) => k.startsWith(prefix)).toList()) {
+      _running.remove(k)?.cancel('这一首要重取');
+    }
   }
 
   /// 队列清空了，还在下的那几首没有意义了。

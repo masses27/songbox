@@ -168,11 +168,13 @@ void main() {
     // 认出来的那一句决定界面上给不给「换版本」：重试对会员墙是白试。
     // 三个源各写各的（网易云两条、腾讯一条、换源链子一条），漏一种就少给一次机会。
     test('网易云、腾讯、链子收尾的说法都算会员墙', () {
-      expect(looksLikeVipWall('这首是网易云会员专享，B 站和别的源上也没找到同一首'), isTrue);
+      expect(looksLikeVipWall('网易云这首要会员，B 站和别的源上也没找到同一首'), isTrue);
+      // QQ 的会员歌撞的是同一堵墙，那句要说「QQ 这首要会员」，别让她去开网易云会员
+      expect(looksLikeVipWall('QQ 这首要会员，B 站和别的源上也没找到能放的同一版本'), isTrue);
       expect(looksLikeVipWall('VIP 专属：网易云这首要会员'), isTrue);
       expect(looksLikeVipWall('这首歌是网易云 VIP 专属'), isTrue);
       expect(looksLikeVipWall('腾讯这首也要会员'), isTrue);
-      // 原曲不是网易云的会员歌时说的是这句（那句「网易云专享」是候选带进来的，别赖到网易云头上）
+      // 原曲本身没撞墙时说的是这句（那句「要会员」是换源候选带进来的）
       expect(looksLikeVipWall('这首几个源上都要会员，没找到能播的免费版'), isTrue);
     });
 

@@ -527,7 +527,11 @@ class LibraryStore extends ChangeNotifier {
   static const _deadOther = Duration(hours: 12);
 
   void markSwapDead(Song s) {
-    final ttl = s.needsVip ? _deadVip : _deadOther;
+    // 判多久看的是「这条结论多久可能变」：会员墙后面找不到免费版是版权层面的事，
+    // 一周内不会变；别的失败多半是当天的网络/风控，12 小时后再问。
+    // 网易云和 QQ 的会员歌都算前者 —— 只认网易云的话，QQ 那批每 12 小时重撞一次
+    // 十八秒的换源链子。
+    final ttl = s.twinBlocked ? _deadVip : _deadOther;
     _deadUntil[keyOf(s)] = DateTime.now().add(ttl).millisecondsSinceEpoch;
     _swaps.remove(keyOf(s));
     _markVip();
@@ -540,9 +544,11 @@ class LibraryStore extends ChangeNotifier {
     _markVip();
   }
 
-  /// 列表里还需要体检的歌：会员墙后面、既没找到免费版也没确认过没有。
+  /// 列表里还需要体检的歌：挡在会员墙后面、既没找到免费版也没确认过没有。
+  /// 按 `twinBlocked` 算而不是只看网易云：QQ 的会员歌撞的也是同一堵墙，
+  /// 漏掉它们等于那一批永远要等播到才现场跑换源。
   List<Song> vipNeedScan(Iterable<Song> songs) =>
-      songs.where((s) => s.needsVip && !hasSwapSong(s) && !swapCheckedDead(s)).toList();
+      songs.where((s) => s.twinBlocked && !hasSwapSong(s) && !swapCheckedDead(s)).toList();
 
   int vipReadyCount(Iterable<Song> songs) => songs.where(hasSwapSong).length;
 

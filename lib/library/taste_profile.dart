@@ -264,7 +264,7 @@ class Taste {
     // 已经备好免费版的那些不压 —— 一按就出声，和免费歌没差别，压下去恰好把她
     // 常听的那几位挤出屏幕。换源缓存记在 LibraryStore 里，口味这层不碰存储，
     // 所以由调用方告诉她「这首现在一按就响」。
-    if (s.needsVip && !(swapReady?.call(s) ?? false)) score -= 2.5;
+    if (s.twinBlocked && !(swapReady?.call(s) ?? false)) score -= 2.5;
     return score;
   }
 

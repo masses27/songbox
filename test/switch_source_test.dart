@@ -53,6 +53,18 @@ void main() {
       final raw = jsonDecode(jsonEncode(Song(source: 'wy', songmid: 'a', name: 'x', fee: 1).toJson()));
       expect(Song.fromJson(Map<String, dynamic>.from(raw)).needsVip, isTrue);
     });
+
+    test('QQ 的 fee=1 也算挡在墙后：角标、整单体检、7 天标记都按这一条', () {
+      // `needsVip` 说的是「网易云端内放不出来」，那句实测只对 wy 成立；
+      // 而「这首得靠换源才出得来声音」wy 和 tx 都一样。按前者判的话，QQ 那批
+      // 会员歌不标角标、不进整单体检，还每 12 小时重撞一次十八秒的换源链子。
+      final txVip = Song(source: 'tx', songmid: 'a', name: 'x', fee: 1);
+      expect(txVip.twinBlocked, isTrue);
+      expect(txVip.needsVip, isFalse);
+      // 酷我没有可靠的付费标记，B 站匿名本来就出整首：都别乱标。
+      expect(Song(source: 'kw', songmid: 'a', name: 'x', fee: 1).twinBlocked, isFalse);
+      expect(Song(source: 'bl', songmid: 'BV1', name: 'x', fee: 1).twinBlocked, isFalse);
+    });
   });
 
   group('找其他版本', () {

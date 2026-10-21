@@ -203,9 +203,11 @@ class BuiltinLibrary {
       LibraryStore.instance.forgetSwapSong(song);
     }
     // 短期内确认过放不出的，直接说，别再让她等二十秒。
+    // 这里的分支要和 [LibraryStore.markSwapDead] 打的那个标记同一判据：那条也是按
+    // 「几个源都要会员」记 7 天的，只认网易云的话 QQ 那批会读出下面那句网络借口。
     if (LibraryStore.instance.swapCheckedDead(song)) {
-      throw Exception(song.needsVip
-          ? '这首是网易云会员专享，B 站和别的源上也没找到同一首'
+      throw Exception(song.twinBlocked
+          ? '${_wallHome(song)}这首要会员，B 站和别的源上也没找到同一首'
           : '这首几个源上都放不出，稍等一下会自动再试');
     }
 
@@ -251,12 +253,12 @@ class BuiltinLibrary {
     // 断网、风控算 flaky，跑到时间预算用完也算——那时候还有几条没试过呢。
     final mark = deadWarranted(F.flaky, DateTime.now(), deadline);
     AppLog.add('链', '「${_short(song.name)}」整条链子走完还是放不出：${F.lines.join(' / ')}');
-    if (song.needsVip) {
+    if (song.twinBlocked) {
       if (mark) _markDead(song);
       // 提示条上就带「换版本」按钮，这句话不必再教她怎么长按。
-      throw Exception('这首是网易云会员专享，B 站和别的源上也没找到能放的同一版本');
+      throw Exception('${_wallHome(song)}这首要会员，B 站和别的源上也没找到能放的同一版本');
     }
-    if (F.lines.any((f) => f.contains('VIP'))) {
+    if (looksLikeVipWall(F.lines.join(' '))) {
       // 走到这儿原曲本身不是网易云的会员歌：那句「VIP」是某个换源候选说的（候选的
       // 台账也混在同一条 lines 里）。所以说「几个源上都要会员」，别把酷我/B 站那首
       // 报成网易云专享 —— 她照着去开网易云会员是白跑一趟。
@@ -275,11 +277,17 @@ class BuiltinLibrary {
       !flaky && now.isBefore(deadline);
 
   static void _markDead(Song song) {
-    AppLog.add('标', '「${_short(song.name)}」记为暂时放不出，${song.needsVip ? '7 天' : '12 小时'}后再问');
+    // 天数写在 [LibraryStore.markSwapDead] 里，这句只是把同一个判据念出来。
+    AppLog.add('标', '「${_short(song.name)}」记为暂时放不出，'
+        '${song.twinBlocked ? '7 天' : '12 小时'}后再问');
     LibraryStore.instance.markSwapDead(song);
   }
 
   static String _short(String s) => s.length <= 18 ? s : '${s.substring(0, 18)}…';
+
+  /// 撞墙那句要说出是谁家的会员。`sourceLabel` 在界面层，本文件被 widgets.dart
+  /// 引着，反向引用成环；而 `twinBlocked` 只有这两个平台会真，写死就够了。
+  static String _wallHome(Song song) => song.source == 'tx' ? 'QQ' : '网易云';
 
   /// 整单体检：把列表里所有会员歌一次性找一遍免费版本，结果直接落盘。
   ///
@@ -442,14 +450,15 @@ class BuiltinLibrary {
     }
 
     // 撞在会员墙后面的歌，端内和 QQ 都要会员、酷我只给 11 秒试听，唯一还肯匿名出整首的
-    // 是 B 站：这种歌把它排第一个，省下的是她等换源的那几秒。
-    if (song.needsVip) await searchOn('bl');
+    // 是 B 站：这种歌把它排第一个，省下的是她等换源的那几秒。判据用 `twinBlocked`——
+    // QQ 的会员歌撞的是同一堵墙，按网易云算的话那一半还是最后才轮到 B 站。
+    if (song.twinBlocked) await searchOn('bl');
     if (song.source == 'wy') await searchOn('wy');
     // QQ 匿名就能出整首 128k，所以排在酷我前面——酷我那条接口现在只给 11 秒试听。
     for (final t in ['tx', 'kw', 'wy']) {
       if (t != song.source) await searchOn(t);
     }
-    if (!song.needsVip) await searchOn('bl');
+    if (!song.twinBlocked) await searchOn('bl');
     return out;
   }
 

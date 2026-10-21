@@ -38,7 +38,7 @@ String _nowTag(PlayerService player, Song song) {
   // 档位按真正出声的那条来源算：换到 B 站的歌还写设置里的无损，就是骗人。
   final tier = heardQuality(AppSettings.instance.quality, swap?.source ?? song.source);
   if (LibraryStore.instance.localFile(song) != null) return '$tier · 本地文件';
-  if (swap != null) return '$tier · ${song.needsVip ? '免费版' : sourceLabel(swap.source)}';
+  if (swap != null) return '$tier · ${song.twinBlocked ? '免费版' : sourceLabel(swap.source)}';
   return '$tier · ${sourceLabel(song.source)}';
 }
 

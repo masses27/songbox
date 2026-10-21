@@ -24,23 +24,6 @@ String sourceLabel(String source) => switch (source) {
       _ => source,
     };
 
-/// 这一首在这台手机上**实际**能听到的档位。
-///
-/// 设置里那一档是「想要」，不是「拿得到」：匿名出整首的那两条各有上限
-/// （B 站 192k、QQ 128k），会员墙后面靠它们兜底的歌永远到不了无损。以前播放页
-/// 和下载弹窗都直接写设置值，于是「无损 flac · 免费版」挂在耳朵是 192k 那儿 ——
-/// 换源本来就看不见摸不着，标注再骗人，她更不会信这功能是真是的。
-String heardQuality(String wanted, String source) {
-  final cap = switch (source) {
-    'bl' => '192k',
-    'tx' => '128k',
-    _ => null,
-  };
-  if (cap == null) return wanted;
-  const order = ['128k', '192k', '320k', 'flac'];
-  return order.indexOf(cap) < order.indexOf(wanted) ? cap : wanted;
-}
-
 /// Rounded pill search bar shown at the top of 首页/发现.
 class NetEaseSearchBar extends StatelessWidget {
   final String hint;
@@ -324,7 +307,9 @@ class _VipScanBarState extends State<VipScanBar> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
-    final vip = widget.songs.where((s) => s.needsVip).length;
+    // 和整单体检的名单同一判据（LibraryStore.vipNeedScan）：QQ 的会员歌撞的也是
+    // 同一堵墙，只数网易云的话这一行报的数比她实际要补的少。
+    final vip = widget.songs.where((s) => s.twinBlocked).length;
     // 一首会员歌都没有就不用提这一行。
     if (vip == 0) return const SizedBox.shrink();
     final ready = store.vipReadyCount(widget.songs);
@@ -434,7 +419,7 @@ class SongListRow extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           ?extraTrailing,
-          if (song.needsVip)
+          if (song.twinBlocked)
             Padding(padding: const EdgeInsets.only(right: 5), child: VipBadge(ready: store.hasSwapSong(song))),
           if (store.hasLocalFile(song))
             Padding(
@@ -564,7 +549,7 @@ Future<void> showSongMenu(BuildContext context, Song song,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                   ),
-                  if (song.needsVip) ...[
+                  if (song.twinBlocked) ...[
                     VipBadge(ready: LibraryStore.instance.hasSwapSong(song)),
                     const SizedBox(width: 6),
                   ],
@@ -694,8 +679,9 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
-                widget.song.needsVip
-                    ? '这首是网易云会员专享。下面是同一首歌的其他录音，点一下就用它顶上。'
+                widget.song.twinBlocked
+                    ? '这首在${widget.song.source == 'tx' ? 'QQ 上' : '网易云上'}要会员。'
+                        '下面是同一首歌的其他录音，点一下就用它顶上。'
                     : '现场版、翻唱、别的平台的同名。点一下换掉当前这首。',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
               ),
@@ -751,7 +737,7 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
       ),
-      trailing: v.needsVip ? const VipBadge() : null,
+      trailing: v.twinBlocked ? const VipBadge() : null,
       onTap: () => Navigator.pop(ctx, v),
     );
   }

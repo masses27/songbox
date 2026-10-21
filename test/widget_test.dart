@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:lyric_music/models/song.dart';
+import 'package:lyric_music/player/audio_prefetch.dart';
 import 'package:lyric_music/ui/theme.dart';
 import 'package:lyric_music/ui/widgets.dart';
 
@@ -28,6 +30,17 @@ void main() {
     expect(heardQuality('flac', 'tx'), '128k');
     expect(heardQuality('128k', 'bl'), '128k'); // 她要的比上限还低，别反过来吹成 192k
     expect(heardQuality('flac', 'wy'), 'flac');
+  });
+
+  test('预取文件名也按实际那一档存', () {
+    // 同一首歌靠 B 站兜整首：键写设置里的无损，改一次音质就把同样的字节再下一遍，
+    // 而且播放时按 192k 查不到磁盘上那份——「提前备好」等于没备。
+    final wy = Song(source: 'wy', songmid: 'm1', name: '会员歌', fee: 1);
+    expect(AudioPrefetch.key(wy, 'flac', servedBy: 'bl'), 'pf-wy-m1-192k');
+    expect(AudioPrefetch.key(wy, '320k', servedBy: 'bl'), 'pf-wy-m1-192k');
+    expect(AudioPrefetch.key(wy, 'flac'), 'pf-wy-m1-flac'); // 没换源：想要哪档存哪档
+    expect(AudioPrefetch.key(Song(source: 'bl', songmid: 'BV1x', name: '整首'), 'flac'),
+        'pf-bl-BV1x-192k');
   });
 
   testWidgets('无限宽的封面块（首页轮播）不会在 build 里炸掉', (tester) async {
