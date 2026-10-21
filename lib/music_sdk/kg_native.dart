@@ -187,6 +187,10 @@ class KgNative {
       // 每首歌一个 key：md5(哈希 + keySalt + appid + mid + userid)，userid 匿名就是 0。
       'key': _md5('$h$_keySalt$_appid${_mid}0'),
     };
+    // 实测过上游 KuGouMusicApi 的写法：它 song_url 里写的 `notSign: true` 其实打不中
+    // createRequest 的判断（那边读的是 `notSignature`），所以它照样发 signature —— 我们照旧的
+    // 参数集就是对的。换成不发 signature 只会拿到 20006「err signature」，换 clientver 11430
+    // 也一样；这一层的门不在参数上，在 v5/url 的行为风控上（见类注释）。
     params['signature'] = _sign(params);
     final resp = await _dio.get(
       'https://gateway.kugou.com/v5/url',
