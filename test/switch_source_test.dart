@@ -139,6 +139,24 @@ void main() {
     });
   });
 
+  group('换源候选值得问哪几档', () {
+    // 档位是**候选那批平台**的能力，不是原曲的设置。会员墙那一步把 128k 从原曲的
+    // 阶梯里砍掉了（网易云三档一起挡，多问一遍只是白等），照这张砍过的表去问只有
+    // 128k 的那类脚本，永远问不到它们唯一有的那一档，还要顺手打一周的「没有免费版」。
+    test('要的和最便宜的一档，最多两次', () {
+      expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'kw'), 'flac'),
+          ['flac', '128k']);
+      expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'kw'), '320k'),
+          ['320k', '128k']);
+      expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'wy'), '128k'), ['128k']);
+    });
+
+    test('B 站匿名整首只有 192k，问第二遍是把同一条接口再打一次', () {
+      expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'bl'), 'flac'), ['192k']);
+      expect(BuiltinLibrary.twinLadder(_s('晴天', '周杰伦', source: 'bl'), '128k'), ['192k']);
+    });
+  });
+
   group('「这首放不出」的标记值不值得落盘', () {
     // 标记一打就是半天（会员歌一周），期间播放器直接跳过、补测也不再问。
     // 打错了的代价是「网络好了歌还是放不出」，所以这两条门槛钉死。

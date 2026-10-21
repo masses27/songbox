@@ -158,6 +158,21 @@ class BuiltinLibrary {
         _ => const ['128k'],
       };
 
+  /// 换源候选值得按哪几档去问 —— 档位是**那个候选自己**的能力，不是原曲的设置。
+  ///
+  /// 复用原曲那张表在两处会错：
+  /// - 会员墙那一步把 128k 从表里砍掉了（网易云三档一起挡，多问一遍只是白等），
+  ///   可酷我这类音源脚本常见只有 128k：拿砍过的表去问它们，永远问不到它们唯一
+  ///   有的那一档，还要顺手打一周的「这首确实没有免费版」。
+  /// - B 站匿名整首只有 192k 一档，问第二遍只是把同一条接口再打一次；整单体检
+  ///   并发跑的时候，多出来的那一次就是撞 412 的额度。
+  /// 所以：她要的那一档 + 最便宜的一档兜底，最多两次。
+  static List<String> twinLadder(Song twin, String quality) {
+    if (twin.source == 'bl') return const ['192k'];
+    final ladder = _qualityLadder(quality);
+    return {ladder.first, ladder.last}.toList();
+  }
+
   /// 整条链子的时间上限。播放那边是 30 秒总超时，这里留出收尾的余量。
   static const _chainBudget = Duration(seconds: 22);
 
@@ -220,7 +235,7 @@ class BuiltinLibrary {
 
     // 会员墙后面往往就是另一平台的免费版；网易云自己的热单能省一半，靠的是这一步。
     for (final twin in await _findTwins(song, F, engine: engine, deadline: deadline)) {
-      for (final q in ladder.take(2)) {
+      for (final q in twinLadder(twin, quality)) {
         final url = await _attempt(twin, q, F, deadline, prefix: '换源 ${twin.source}：');
         if (url != null) {
           // 记住这次的成功：下次同一首直接放这条，整首队列也不再撞墙。
@@ -242,8 +257,11 @@ class BuiltinLibrary {
       throw Exception('这首是网易云会员专享，B 站和别的源上也没找到能放的同一版本');
     }
     if (F.lines.any((f) => f.contains('VIP'))) {
+      // 走到这儿原曲本身不是网易云的会员歌：那句「VIP」是某个换源候选说的（候选的
+      // 台账也混在同一条 lines 里）。所以说「几个源上都要会员」，别把酷我/B 站那首
+      // 报成网易云专享 —— 她照着去开网易云会员是白跑一趟。
       if (mark) _markDead(song);
-      throw Exception('这首是网易云会员专享，其他源也没找到能播的版本');
+      throw Exception('这首几个源上都要会员，没找到能播的免费版');
     }
     if (mark) _markDead(song);
     throw Exception('没能取到完整音频\n${F.lines.join('\n')}');
@@ -296,11 +314,15 @@ class BuiltinLibrary {
     final deadline = DateTime.now().add(const Duration(seconds: 18));
     final quality = AppSettings.instance.quality;
     for (final twin in await _findTwins(song, F, engine: LxEngine.active, deadline: deadline)) {
-      final url = await _attempt(twin, quality, F, deadline, prefix: '体检 ${twin.source}：');
-      if (url != null) {
-        AppLog.add('补', '「${_short(song.name)}」备好 ${twin.source} 的免费版');
-        LibraryStore.instance.rememberSwapSong(song, twin);
-        return true;
+      // 档位按候选判（和 resolveUrl 那条链子同一个条件）：只问设置里那一档，
+      // 只有 128k 的那类脚本就永远问不到，体检完还要顺手打上「确实没有免费版」。
+      for (final q in twinLadder(twin, quality)) {
+        final url = await _attempt(twin, q, F, deadline, prefix: '体检 ${twin.source}：');
+        if (url != null) {
+          AppLog.add('补', '「${_short(song.name)}」备好 ${twin.source} 的免费版');
+          LibraryStore.instance.rememberSwapSong(song, twin);
+          return true;
+        }
       }
     }
     // 搜索本身没回来、一路超时，或者 18 秒预算跑到头（那时候还有候选没试），

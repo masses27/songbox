@@ -24,6 +24,23 @@ String sourceLabel(String source) => switch (source) {
       _ => source,
     };
 
+/// 这一首在这台手机上**实际**能听到的档位。
+///
+/// 设置里那一档是「想要」，不是「拿得到」：匿名出整首的那两条各有上限
+/// （B 站 192k、QQ 128k），会员墙后面靠它们兜底的歌永远到不了无损。以前播放页
+/// 和下载弹窗都直接写设置值，于是「无损 flac · 免费版」挂在耳朵是 192k 那儿 ——
+/// 换源本来就看不见摸不着，标注再骗人，她更不会信这功能是真是的。
+String heardQuality(String wanted, String source) {
+  final cap = switch (source) {
+    'bl' => '192k',
+    'tx' => '128k',
+    _ => null,
+  };
+  if (cap == null) return wanted;
+  const order = ['128k', '192k', '320k', 'flac'];
+  return order.indexOf(cap) < order.indexOf(wanted) ? cap : wanted;
+}
+
 /// Rounded pill search bar shown at the top of 首页/发现.
 class NetEaseSearchBar extends StatelessWidget {
   final String hint;
@@ -926,11 +943,15 @@ Future<void> requestDownload(BuildContext context, Song song) async {
   final settings = AppSettings.instance;
   final dm = context.read<DownloadManager>();
   if (settings.confirmBeforeDownload) {
+    // 落到磁盘的是哪一档，看的是这条音频从哪个平台来：会员歌换 B 站兜底的，
+    // 设成无损也只有 192k。弹窗许一个拿不到的档位，下完她才发现不对就太晚了。
+    final from = LibraryStore.instance.swapSongFor(song)?.source ?? song.source;
+    final tier = heardQuality(settings.quality, from);
     final ok = await confirmAction(
       context,
       title: '开始下载',
-      message: '将以 ${settings.quality} 下载「${song.name}」。\n'
-          '无损格式一首可达 30 MB 以上，移动网络下会消耗流量。',
+      message: '将以 $tier 下载「${song.name}」。\n'
+          '${tier == 'flac' ? '无损格式一首可达 30 MB 以上，' : ''}移动网络下会消耗流量。',
       confirmLabel: '下载',
     );
     if (!ok) return;

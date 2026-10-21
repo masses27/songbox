@@ -188,7 +188,8 @@ class Taste {
   /// 同一天分数一模一样（她没再听任何东西的话），换一天则靠 [_jitter] 重排一次，
   /// 于是「今日私荐」每天看起来都在动，但排序本身没被搅乱。
   /// 口味为空（她还没听出任何偏好）时也一样能跑，只是分不出高下、由抖动决定顺序。
-  List<Song> rank(List<Song> pool, {required int count, DateTime? at}) {
+  List<Song> rank(List<Song> pool,
+      {required int count, DateTime? at, bool Function(Song)? swapReady}) {
     final d = at ?? DateTime.now();
     // 新歌位和榜单是两份名单，同一首歌常常两边都在：不去重就会在同一屏里出现两遍，
     // 而分数一模一样的那些还正好紧挨着排。
@@ -199,7 +200,9 @@ class Taste {
         skip.isEmpty ? uniq : [for (final s in uniq) if (!skip.contains(keyOf(s))) s];
     final use = fresh.length >= count ? fresh : uniq;
     if (use.length <= count) return List.of(use);
-    final scored = [for (final s in use) (song: s, score: scoreOf(s) + _jitter(s, d))]
+    final scored = [
+      for (final s in use) (song: s, score: scoreOf(s, swapReady: swapReady) + _jitter(s, d))
+    ]
       ..sort((a, b) => b.score.compareTo(a.score));
     return _spread([for (final e in scored) e.song], count);
   }
@@ -248,7 +251,7 @@ class Taste {
 
   /// 一首歌对口味的贴合度。命中她反复听过的歌手是唯一的主分，其余几项都只用来
   /// 把同分的歌排开一点。
-  double scoreOf(Song s) {
+  double scoreOf(Song s, {bool Function(Song)? swapReady}) {
     var score = 0.0;
     for (final a in artistsOf(s)) {
       score += artists[a] ?? 0;
@@ -258,7 +261,10 @@ class Taste {
     if (wornOut.contains(keyOf(s))) score -= 6;
     // 会员墙后面的歌压一档：这台手机上它多半要绕一整条换源链子才出得来声音，
     // 一屏里塞三首这种，她的感受就是「今天怎么又是放不出的」。
-    if (s.needsVip) score -= 2.5;
+    // 已经备好免费版的那些不压 —— 一按就出声，和免费歌没差别，压下去恰好把她
+    // 常听的那几位挤出屏幕。换源缓存记在 LibraryStore 里，口味这层不碰存储，
+    // 所以由调用方告诉她「这首现在一按就响」。
+    if (s.needsVip && !(swapReady?.call(s) ?? false)) score -= 2.5;
     return score;
   }
 

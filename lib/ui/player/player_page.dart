@@ -34,11 +34,12 @@ String _fmtLeft(Duration d) {
 /// 走没走成，只能靠猜。写出来才算说清楚「一首歌一个源」是真的在按首生效。
 String _nowTag(PlayerService player, Song song) {
   if (player.busy) return '加载中…';
-  final base = AppSettings.instance.quality;
-  if (LibraryStore.instance.localFile(song) != null) return '$base · 本地文件';
   final swap = LibraryStore.instance.swapSongFor(song);
-  if (swap != null) return '$base · ${song.needsVip ? '免费版' : sourceLabel(swap.source)}';
-  return '$base · ${sourceLabel(song.source)}';
+  // 档位按真正出声的那条来源算：换到 B 站的歌还写设置里的无损，就是骗人。
+  final tier = heardQuality(AppSettings.instance.quality, swap?.source ?? song.source);
+  if (LibraryStore.instance.localFile(song) != null) return '$tier · 本地文件';
+  if (swap != null) return '$tier · ${song.needsVip ? '免费版' : sourceLabel(swap.source)}';
+  return '$tier · ${sourceLabel(song.source)}';
 }
 
 class PlayerPage extends StatefulWidget {

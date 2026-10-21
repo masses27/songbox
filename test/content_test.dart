@@ -272,6 +272,12 @@ void main() {
         taste.scoreOf(Song(source: 'wy', songmid: 'v', name: '会员歌', singer: '某人', fee: 1)),
         lessThan(taste.scoreOf(Song(source: 'wy', songmid: 'f', name: '免费歌', singer: '某人'))),
       );
+      // 已经找到免费版的就别再压：那些一按就出声，压下去把她常听的那几位挤出屏幕。
+      expect(
+        taste.scoreOf(Song(source: 'wy', songmid: 'v', name: '会员歌', singer: '某人', fee: 1),
+            swapReady: (_) => true),
+        taste.scoreOf(Song(source: 'wy', songmid: 'f', name: '免费歌', singer: '某人')),
+      );
     });
   });
 

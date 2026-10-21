@@ -172,6 +172,8 @@ void main() {
       expect(looksLikeVipWall('VIP 专属：网易云这首要会员'), isTrue);
       expect(looksLikeVipWall('这首歌是网易云 VIP 专属'), isTrue);
       expect(looksLikeVipWall('腾讯这首也要会员'), isTrue);
+      // 原曲不是网易云的会员歌时说的是这句（那句「网易云专享」是候选带进来的，别赖到网易云头上）
+      expect(looksLikeVipWall('这首几个源上都要会员，没找到能播的免费版'), isTrue);
     });
 
     test('连不上、只有试听片段这些不是会员墙', () {

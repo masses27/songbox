@@ -20,6 +20,16 @@ void main() {
     expect(sourceLabel('bl'), 'B 站');
   });
 
+  test('档位标注写实际听到的那一档', () {
+    // 换源/匿名兜底的那两条各有上限（B 站 192k、QQ 128k），永远到不了无损。
+    // 播放页和下载弹窗都写设置值的话，「无损 flac · 免费版」挂在耳朵是 192k 那儿。
+    expect(heardQuality('flac', 'bl'), '192k');
+    expect(heardQuality('320k', 'bl'), '192k');
+    expect(heardQuality('flac', 'tx'), '128k');
+    expect(heardQuality('128k', 'bl'), '128k'); // 她要的比上限还低，别反过来吹成 192k
+    expect(heardQuality('flac', 'wy'), 'flac');
+  });
+
   testWidgets('无限宽的封面块（首页轮播）不会在 build 里炸掉', (tester) async {
     // size = double.infinity 时 (size * dpr).round() 抛 UnsupportedError，
     // release 下整个 banner 只剩空白，看起来就是「推荐页没有图」。

@@ -52,7 +52,8 @@ class _DailyPageState extends State<DailyPage> {
       final pool = taste.isEmpty ? news : [...news, ...await _rankPool()];
       if (!mounted) return;
       setState(() {
-        _today = taste.rank(pool, count: 12);
+        // 已经找到免费版的会员歌不该再被口味引擎压档：那些一按就出声。
+        _today = taste.rank(pool, count: 12, swapReady: LibraryStore.instance.hasSwapSong);
         _why = taste.isEmpty ? const [] : taste.topArtists(2);
       });
       AppLog.add('荐', '今日私荐 ${_today.length} 首（池子 ${pool.length} 首）'
