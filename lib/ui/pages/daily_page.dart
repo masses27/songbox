@@ -1,18 +1,22 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../library/library_store.dart';
 import '../../models/song.dart';
 import '../../player/player_service.dart';
+import '../../util/app_log.dart';
 import '../../util/humanize.dart';
 import '../player/player_bar.dart';
+import '../rank_groups.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'builtin_library.dart';
 
-/// 今日私荐 — 每天从推荐池里稳定抽一批，早上看到的和晚上看到的是同一份，
-/// 但第二天会自己换。网易云「每日推荐」的用法，只是不需要登录。
+/// 今日私荐 — 按她本机听出来的口味，从当天的公共池子里挑一批。
+///
+/// 没有登录，也没有平台账号，所以「私荐」这两个字只可能靠听歌记录本身兑现：
+/// 收藏、自建歌单、每首歌播过几次、有没有听完（见 Taste 那一层）。口味还没听出来的
+/// 时候退回原来的做法 —— 按日期从池子里稳定抽一批，第二天自己换。
 class DailyPage extends StatefulWidget {
   const DailyPage({super.key});
 
@@ -22,6 +26,9 @@ class DailyPage extends StatefulWidget {
 
 class _DailyPageState extends State<DailyPage> {
   List<Song> _today = const [];
+
+  /// 这批歌是按哪几位歌手挑的，空表示还在用日期抽。
+  List<String> _why = const [];
   bool _loading = false;
   String? _error;
 
@@ -39,13 +46,36 @@ class _DailyPageState extends State<DailyPage> {
     try {
       // 下拉刷新要绕过 5 分钟目录缓存，否则拉出来的还是缓存里那一批。
       if (refresh) BuiltinLibrary.instance.invalidateCatalog();
-      final pool = await BuiltinLibrary.instance.recommendedSongs(limit: 30);
+      final taste = LibraryStore.instance.taste();
+      final news = await BuiltinLibrary.instance.recommendedSongs(limit: 30);
+      // 30 首新歌这个池子太浅，口味在里面挑不出东西：有余力就把官方主榜倒进来。
+      final pool = taste.isEmpty ? news : [...news, ...await _rankPool()];
       if (!mounted) return;
-      setState(() => _today = pickToday(pool));
+      setState(() {
+        _today = taste.rank(pool, count: 12);
+        _why = taste.isEmpty ? const [] : taste.topArtists(2);
+      });
+      AppLog.add('荐', '今日私荐 ${_today.length} 首（池子 ${pool.length} 首）'
+          '${_why.isEmpty ? '：还没听出口味，按日期抽' : '：按 ${_why.join('、')} 挑'}');
     } catch (e) {
+      AppLog.add('荐', '今日私荐没拉到：${humanizeError(e)}');
       if (mounted) setState(() => _error = humanizeError(e));
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// 榜单拿不到就算了：口味照样能在剩下的池子里挑，只是准头差一点，
+  /// 不该因为一个榜挂了整页就报错。
+  Future<List<Song>> _rankPool() async {
+    try {
+      final ranks = homeRanks(await BuiltinLibrary.instance.rankList('wy'));
+      final pages = await Future.wait([
+        for (final r in ranks.take(2)) BuiltinLibrary.instance.rankSongs(r.source, r.id),
+      ]);
+      return [for (final p in pages) ...p.list];
+    } catch (_) {
+      return const [];
     }
   }
 
@@ -63,7 +93,7 @@ class _DailyPageState extends State<DailyPage> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text('${date.month}月${date.day}日 · 每天换一批，收藏了就存进歌单',
+                  child: Text(_subtitle(date),
                       style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                 ),
                 if (_today.isNotEmpty)
@@ -106,9 +136,13 @@ class _DailyPageState extends State<DailyPage> {
                     active: context.select<PlayerService, bool>((p) => p.isCurrent(_today[i])),
                   ),
                 Padding(
-                  padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
-                  child: Text('这批歌按日期抽，换一天再进来就是另一批。',
-                      style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  child: Text(
+                    _why.isEmpty
+                        ? '这批歌按日期抽，换一天再进来就是另一批。多听几首、收藏几首，下一次进来就照你听出来的口味挑。'
+                        : '照你最近听过的 ${_why.join('、')} 挑的，换一天再进来会换一批。',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                  ),
                 ),
               ],
             ),
@@ -117,20 +151,11 @@ class _DailyPageState extends State<DailyPage> {
       ),
     );
   }
-}
 
-/// Date-seeded shuffle so the same day always yields the same picks. A random
-/// pool order on every rebuild would make the list jump around under setState.
-List<Song> pickToday(List<Song> pool, {int count = 12, DateTime? at}) {
-  if (pool.length <= count) return List.of(pool);
-  final d = at ?? DateTime.now();
-  final rnd = Random(d.year * 372 + d.month * 31 + d.day);
-  final picks = List.of(pool);
-  for (var i = picks.length - 1; i > 0; i--) {
-    final j = rnd.nextInt(i + 1);
-    final t = picks[i];
-    picks[i] = picks[j];
-    picks[j] = t;
+  String _subtitle(DateTime date) {
+    final day = '${date.month}月${date.day}日';
+    if (_why.isEmpty) return '$day · 每天换一批，收藏了就存进歌单';
+    // 把「为什么是这几首」写在脸上：口味是她听出来的，这句话才是这一页的证据。
+    return '$day · 按你听过的 ${_why.join('、')} 挑的';
   }
-  return picks.sublist(0, count);
 }

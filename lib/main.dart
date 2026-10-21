@@ -10,6 +10,7 @@ import 'ui/pages/builtin_library.dart';
 import 'player/player_service.dart';
 import 'settings/app_settings.dart';
 import 'source/source_manager.dart';
+import 'util/app_log.dart';
 import 'util/humanize.dart';
 import 'ui/pages/discover_page.dart';
 import 'ui/pages/home_page.dart';
@@ -39,7 +40,19 @@ Future<void> main() async {
     AppSettings.instance.init(),
     SourceManager.instance.init(),
     LibraryStore.instance.init(),
+    AppLog.init(),
   ]);
+  AppLog.add('起', '听歌小窝 v${AppSettings.appVersion} 启动');
+  // 崩溃和「歌自己停了」是她最没法转述的一种现象：留下最后一根线索，比事后追问
+  // 「当时屏幕上写了什么」有用得多。只记类型和头一句，栈太长会把日志页挤满。
+  FlutterError.onError = (details) {
+    AppLog.add('崩', details.exceptionAsString());
+    FlutterError.presentError(details);
+  };
+  WidgetsBinding.instance.platformDispatcher.onError = (e, s) {
+    AppLog.add('崩', '$e');
+    return false;
+  };
   PlayerService.instance
     ..bindResolvers(
       url: BuiltinLibrary.instance.cachedUrl,
@@ -56,7 +69,9 @@ Future<void> main() async {
     SourceManager.instance.activation = () async {
       try {
         await SourceManager.instance.activate(activeId);
-      } catch (_) {}
+      } catch (e) {
+        AppLog.add('源', '音源脚本激活失败，端内直连照常可用：${humanizeError(e)}');
+      }
     }();
   }
   runApp(

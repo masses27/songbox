@@ -7,9 +7,31 @@ import 'package:path_provider/path_provider.dart';
 import '../models/results.dart';
 import '../models/song.dart';
 import '../util/json_file.dart';
+import 'taste_profile.dart';
 import 'user_playlist.dart';
 
 enum LibraryKind { favorites, recent, downloaded }
+
+/// 一首歌被听出来的样子：最后一次什么时候开播、总共开播几次、完整听完几次、
+/// 最后一次听到第几秒。口味引擎用的就是这四个数 ——「点开就划走」和「听完一整首」
+/// 差着一个量级，可原来的最近播放把这两件事记成了同一种。
+class PlayStat {
+  int at;
+  int plays;
+  int done;
+  int heard;
+
+  PlayStat({this.at = 0, this.plays = 0, this.done = 0, this.heard = 0});
+
+  factory PlayStat.fromJson(Map<String, dynamic> j) => PlayStat(
+        at: (j['at'] as num?)?.toInt() ?? 0,
+        plays: (j['plays'] as num?)?.toInt() ?? 0,
+        done: (j['done'] as num?)?.toInt() ?? 0,
+        heard: (j['heard'] as num?)?.toInt() ?? 0,
+      );
+
+  Map<String, dynamic> toJson() => {'at': at, 'plays': plays, 'done': done, 'heard': heard};
+}
 
 /// Lightweight JSON-file-backed library for favorites / recent plays / downloads.
 /// Keeps this project dependency-free (no sqflite schema churn) while
@@ -64,6 +86,7 @@ class LibraryStore extends ChangeNotifier {
       _sheets.addAll(sj.whereType<Map>().map((e) => SheetInfo.fromJson(Map<String, dynamic>.from(e))));
     }
     _readVip(JsonFile.read(_vipFile));
+    _readStats(JsonFile.read(_statsFile));
     _loaded = true;
     _favKeys = null;
     notifyListeners();
@@ -134,6 +157,145 @@ class LibraryStore extends ChangeNotifier {
       list.removeLast();
     }
     _markDirty(LibraryKind.recent);
+    notePlay(s);
+  }
+
+  // ---- 听歌记账 ----------------------------------------------------------
+  //
+  // 「播了」和「听完了」是两件事，可原来的最近播放只记得前者：一首歌被划过去
+  // 和被听完，在数据里长得一模一样。口味要的是这一首究竟听进去多少 —— 所以
+  // 每首都记开播时间、播过几次、听完几次、最后听到第几秒；再按天存一份条数，
+  // 好让「这周听了多少」不用回放到原始事件。
+  //
+  // 单独放一个文件：recent.json 的结构是 Song 列表，别为了几个计数去动那个模型。
+
+  final Map<String, PlayStat> _stats = {};
+  final Map<String, int> _days = {};
+
+  File get _statsFile => File('${_root.path}/play_stats.json');
+
+  /// 一首歌最多留一条记录，但记录本身比最近播放那 200 行长寿得多：口味引擎要看的
+  /// 是半年前也反复播过的那个人，把统计跟着列表一起截掉，就把她听过的最好的部分丢了。
+  static const _statsCap = 2000;
+  static const _daysCap = 180;
+
+  PlayStat? playStat(Song s) => _stats[keyOf(s)];
+
+  /// 她本机听出来的口味。进「今日私荐」时算一次：几百条记录，纯内存加权，
+  /// 不用等网络也不必落盘。
+  Taste taste() => Taste.from(
+        favorites: list(LibraryKind.favorites),
+        recent: list(LibraryKind.recent),
+        playlistSongs: [for (final p in _playlists) ...p.songs],
+        stats: {
+          for (final e in _stats.entries)
+            e.key: (plays: e.value.plays, done: e.value.done, heard: e.value.heard, at: e.value.at),
+        },
+      );
+
+  /// 开播记账：一次「开始放这首」。
+  void notePlay(Song s) {
+    final now = DateTime.now();
+    final st = _stats.putIfAbsent(keyOf(s), PlayStat.new)
+      ..at = now.millisecondsSinceEpoch;
+    st.plays++;
+    final day = _dayKey(now);
+    _days[day] = (_days[day] ?? 0) + 1;
+    if (_days.length > _daysCap) {
+      final oldest = _days.keys.where((k) => k != day).toList()..sort();
+      if (oldest.isNotEmpty) _days.remove(oldest.first);
+    }
+    if (_stats.length > _statsCap) _pruneStats();
+    _dirtyStats = true;
+    _scheduleStatsFlush();
+  }
+
+  /// 听到哪 / 有没有听完。[_stats] 里没这首歌（老数据或记账之前就在放）时补一条，
+  /// 不然「听完过」这个最强的信号会被整批丢掉。
+  void noteHeard(Song s, {required int heardSeconds, required bool completed}) {
+    final st = _stats.putIfAbsent(keyOf(s), PlayStat.new);
+    // 只往上抬：上次听到 200 秒、这次手滑点开 15 秒就收回，覆盖掉的话她在 180 秒
+    // 处听完过这件事就没了，口味只会越算越不准。
+    if (heardSeconds > st.heard) st.heard = heardSeconds;
+    if (completed) st.done++;
+    // 补记的条目也要有日期，不然半衰期会把它当常青信号算。
+    if (st.at <= 0) st.at = DateTime.now().millisecondsSinceEpoch;
+    _dirtyStats = true;
+    _scheduleStatsFlush();
+  }
+
+  /// 按最后一次开播时间砍掉最旧的那些：口味只看最近的行为，过老的记录没价值。
+  void _pruneStats() {
+    final keys = _stats.keys.toList()..sort((a, b) => _stats[a]!.at.compareTo(_stats[b]!.at));
+    for (var i = 0; i < keys.length - _statsCap && i < keys.length; i++) {
+      _stats.remove(keys[i]);
+    }
+  }
+
+  /// 某一天播了多少次。
+  int playsOn(DateTime day) => _days[_dayKey(day)] ?? 0;
+
+  /// 最近 [days] 天（含今天）一共播了多少次。天粒度直方图是这儿唯一能算的口径 ——
+  /// 逐次事件不留在本地，一部手机听半年的量不该变成一份日志文件。
+  int playsInLastDays(int days) {
+    final today = DateTime.now();
+    var sum = 0;
+    for (var i = 0; i < days; i++) {
+      sum += playsOn(today.subtract(Duration(days: i)));
+    }
+    return sum;
+  }
+
+  static String _dayKey(DateTime t) =>
+      '${t.year.toString().padLeft(4, '0')}-${t.month.toString().padLeft(2, '0')}-'
+      '${t.day.toString().padLeft(2, '0')}';
+
+  /// 毫秒时间戳写成界面上读得通的「今天 / 昨天 / 3 天前 / 10 月 18 日」。
+  static String dayLabel(int at) {
+    if (at <= 0) return '';
+    final t = DateTime.fromMillisecondsSinceEpoch(at);
+    final days = DateTime.now().difference(DateTime(t.year, t.month, t.day)).inDays;
+    if (days == 0) return '今天';
+    if (days == 1) return '昨天';
+    if (days < 7) return '$days 天前';
+    return '${t.month} 月 ${t.day} 日';
+  }
+
+  Timer? _statsAutosave;
+  bool _dirtyStats = false;
+
+  void _scheduleStatsFlush() {
+    _statsAutosave?.cancel();
+    // 一次听歌只动一条记录，但连点十几首时不该每首都落一次盘。
+    _statsAutosave = Timer(const Duration(seconds: 5), _flushStats);
+  }
+
+  void _flushStats() {
+    if (!_dirtyStats) return;
+    _dirtyStats = false;
+    JsonFile.write(_statsFile, {
+      'songs': _stats.map((k, v) => MapEntry(k, v.toJson())),
+      'days': _days,
+    });
+  }
+
+  void _readStats(Object? raw) {
+    if (raw is! Map) return;
+    final songs = raw['songs'];
+    if (songs is Map) {
+      songs.forEach((k, v) {
+        if (k is! String || v is! Map) return;
+        try {
+          _stats[k] = PlayStat.fromJson(Map<String, dynamic>.from(v));
+        } catch (_) {}
+      });
+    }
+    final days = raw['days'];
+    if (days is Map) {
+      days.forEach((k, v) {
+        if (k is String && v is num) _days[k] = v.toInt();
+      });
+    }
   }
 
   void markDownloaded(Song s) {
@@ -447,6 +609,8 @@ class LibraryStore extends ChangeNotifier {
   /// 切后台/退出前立刻落盘：2 秒防抖窗口里的收藏与最近播放不该被系统杀进程带走。
   void flushNow() {
     _flush();
+    _statsAutosave?.cancel();
+    _flushStats();
     _writePaths();
     _writePlaylists();
   }

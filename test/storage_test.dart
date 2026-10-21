@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lyric_music/settings/app_settings.dart';
+import 'package:lyric_music/util/app_log.dart';
 import 'package:lyric_music/util/json_file.dart';
 import 'package:lyric_music/util/memo.dart';
 
@@ -142,6 +143,35 @@ void main() {
         final g = AppSettings.newTxGuid(Random(seed));
         expect(g.length, 10, reason: 'seed $seed 生成成 ${g.length} 位了');
       }
+    });
+  });
+
+  group('听歌日志', () {
+    // 这一段全程不调 init：日志目录要等 path_provider 回来，而冷启动头几百毫秒
+    // 的日志正是攒在内存里那份。攒的下限行为反而是最该钉住的。
+    test('目录还没就绪时先攒着，一行都不落在地上', () async {
+      AppLog.add('播', '第一条');
+      AppLog.add('链', '第二条');
+      final t = await AppLog.tail();
+      expect(t, contains('[播] 第一条'));
+      expect(t.split('\n').last, contains('[链] 第二条'));
+      expect(t.split('\n').last, matches(r'^\d\d:\d\d:\d\d '));
+    });
+
+    test('攒过头就丢最旧的，别把内存当日志盘', () async {
+      for (var i = 0; i < 260; i++) {
+        AppLog.write('刷 $i');
+      }
+      final lines = (await AppLog.tail()).split('\n');
+      expect(lines.length, lessThanOrEqualTo(200));
+      expect(lines.last, '刷 259');
+      expect(lines.first, isNot(contains('第一条')), reason: '满了该丢的是最旧那些');
+    });
+
+    test('复制出去的那段开头带着版本和音质', () async {
+      final t = await AppLog.exportText();
+      expect(t, startsWith('听歌小窝 v${AppSettings.appVersion} · 音质 ${AppSettings.instance.quality}'));
+      expect(t, contains('----'));
     });
   });
 }

@@ -13,6 +13,7 @@ import '../models/results.dart';
 import '../models/song.dart';
 import '../music_sdk/bl_source.dart';
 import '../settings/app_settings.dart';
+import '../util/app_log.dart';
 import '../util/art_url.dart';
 import '../util/humanize.dart';
 import 'audio_prefetch.dart';
@@ -191,9 +192,39 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   int _netRetries = 0;
   Timer? _netRetry;
 
+  /// 断流那一刻听到的位置。重试统一走 [playAt]，而它每次都要重下音源、从 00:00
+  /// 起播 —— 已经听到 2:13 的歌在网络回来之后从头放，听感上就是这首歌被弄丢了。
+  /// 记下时带上是哪一首：只有键对得上才用掉它，任何分支都不留残留，
+  /// 免得下次切到别的歌接到旧位置上去。
+  Duration? _resumeAt;
+  String? _resumeKey;
+
+  /// 前几秒就断的多半是取链或文件本身的问题，从头重试才对，接着放只会反复撞同一处。
+  static const _resumeFloor = Duration(seconds: 5);
+
+  /// 断流时 [_ap] 的 position 有可能已经被清回零，所以边播边把最后听到的位置留着。
+  Duration _lastHeard = Duration.zero;
+
+  /// 自然播完的那首已经在 [_onTrackEnd] 记过账，紧跟着那一次 [playAt] 别再把它
+  /// 记成「听到一半跳走」—— 一次播放只该记一次。
+  String? _endNoted;
+
   /// 人已经不在应用里了（息屏、切走）。这时候系统随时可能掐掉后台网络，所以本地
   /// 备着的歌就是唯一的保险，多备一首值得。
   bool _background = false;
+
+  /// 这一次的声音是从哪儿来的，只为写进日志：出问题时第一句要问的就是
+  /// 「是本机文件还是现取的网络地址」。见 [_sourceFor]。
+  String _how = '';
+
+  /// 日志里的歌名：两边都截一下，一条 200 行的日志要能在手机屏幕上看完。
+  static String _t(Song s) {
+    final n = s.name.isEmpty ? '未知歌曲' : s.name;
+    return n.length <= 18 ? n : '${n.substring(0, 18)}…';
+  }
+
+  static String _mm(Duration d) =>
+      '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -208,6 +239,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription<PlayerState>? _stateSub;
   StreamSubscription<bool>? _playingSub;
   StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<PlayerException>? _errorSub;
 
   Stream<Duration> get positionStream => _ap.positionStream;
   Stream<Duration?> get durationStream => _ap.durationStream;
@@ -242,19 +274,52 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     });
     _playingSub = _ap.playingStream.listen((_) => notifyListeners());
     _positionSub = _ap.positionStream.listen((p) {
+      if (_ap.playing) _lastHeard = p;
       if (_updateLyricIndex(p)) notifyListeners();
       _maybePrefetch(p);
     });
+    _errorSub = _ap.errorStream.listen(_onPlayerError);
+  }
+
+  /// 播放中途被掐断走的是这条流，不是 [playAt] 的 catch：息屏后系统收回网络、CDN
+  /// 半路断流、预取留下的半截文件都会在这里冒出来，而原来没人听它 —— 于是界面上
+  /// 既没有报错也没有等待提示，她的感受就是「歌自己停了，也不知道为什么」。
+  ///
+  /// 已经听过几秒的非本地文件按断流处理：记住位置、扔掉手上这条地址，交给等一等
+  /// 重试那条路，恢复后接着原处放。剩下的（下载的文件放不出、真的没有免费版）
+  /// 等回来也一样，直接把话说清楚。
+  void _onPlayerError(PlayerException e) {
+    final song = current;
+    if (song == null || _ap.processingState == ProcessingState.idle) return;
+    final pos = _lastHeard > _ap.position ? _lastHeard : _ap.position;
+    if (pos >= _resumeFloor && !LibraryStore.instance.hasLocalFile(song)) {
+      _resumeAt = pos;
+      _resumeKey = LibraryStore.keyOf(song);
+      AppLog.add('播', '「${_t(song)}」在第 ${_mm(pos)} 断流，记住位置等重连');
+      _urlStaler?.call(song, AppSettings.instance.quality);
+      AudioPrefetch.instance.drop(song, AppSettings.instance.quality);
+      if (_retryOnStreamDrop(_generation)) return;
+    }
+    failedSong = song;
+    error = humanizeError(e);
+    _lastFailVip = looksLikeVipWall(error);
+    AppLog.add('播', '「${_t(song)}」放不出：$error');
+    if (_failStreak == 0) errorTick++;
+    notifyListeners();
   }
 
   /// Replace the queue and start from [start]. The only entry point pages need.
   Future<void> playList(List<Song> songs, int start) async {
     if (songs.isEmpty) return;
     _failStreak = 0;
+    // 她重新挑了一整条队列，上一首断流留下的位置就此作废：从这一行的开头播才对得上意图。
+    _resumeAt = null;
+    _resumeKey = null;
     queue
       ..clear()
       ..addAll(songs);
     final from = start.clamp(0, songs.length - 1);
+    AppLog.add('播', '换了队列：${songs.length} 首，从「${_t(songs[from])}」开始');
     _scanVip(queue, from);
     await playAt(from);
   }
@@ -288,7 +353,11 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       } catch (_) {
         return;
       }
-      if (gen != _vipScanGen || (r.fixed == 0 && r.dead == 0)) return; // 一首都没得查，别打扰
+      if (gen != _vipScanGen) return;
+      if (r.total > 0) {
+        AppLog.add('补', '整单补测 ${r.total} 首会员歌：备好 ${r.fixed} 首，${r.dead} 首确实没有');
+      }
+      if (r.fixed == 0 && r.dead == 0) return; // 一首都没换到，别打扰
       notice = r.fixed > 0
           ? '${r.fixed} 首会员歌已备好免费版本'
           : '这 ${r.total} 首会员歌确实没有免费版本，播到时会直接跳过';
@@ -300,6 +369,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// Play the queue item at [i], fetching its URL only when it is needed.
   Future<void> playAt(int i) async {
     if (i < 0 || i >= queue.length) return;
+    // 切走的这一刻先给上一首记一笔账：她听到第几秒就走了，是口味最直接的信号，
+    // 而全App只有这里知道那一刻。自然播完的那首已经在 [_onTrackEnd] 记过，跳过。
+    final out = current;
+    final outHeard = _lastHeard;
     final gen = ++_generation;
     index = i;
     busy = true;
@@ -311,12 +384,31 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _randomPick = null;
     notifyListeners();
     final song = queue[i];
+    if (out != null &&
+        LibraryStore.keyOf(out) != LibraryStore.keyOf(song) &&
+        LibraryStore.keyOf(out) != _endNoted) {
+      _noteHeard(out, heard: outHeard, completed: false);
+    }
+    _endNoted = null;
+    // 断流留下的位置只对那一首、那一次重试有用：对不上号就先清掉，用掉之后再清一次，
+    // 免得她下次主动重听同一首被接到半路去。对得上时先不消费 —— 网络还没回来时
+    // 这里会连着失败好几轮，每轮都值得用同一个位置接着放。
+    final resume = _resumeKey == LibraryStore.keyOf(song) ? _resumeAt : null;
+    if (resume == null) {
+      _resumeAt = null;
+      _resumeKey = null;
+    }
+    _lastHeard = Duration.zero;
+    if (resume != null) AppLog.add('播', '「${_t(song)}」要从 ${_mm(resume)} 接着放');
     try {
       final source = await _sourceFor(song).timeout(const Duration(seconds: 30));
       if (gen != _generation) return;
       // 取到链接不等于放得出来：音源脚本卡住或平台层不回应时，没有超时就永远
       // 停在「加载中」，自动跳下一首也永远不会触发。
-      await _ap.setAudioSource(source).timeout(const Duration(seconds: 15));
+      await _ap.setAudioSource(source, initialPosition: resume).timeout(const Duration(seconds: 15));
+      _resumeAt = null;
+      _resumeKey = null;
+      AppLog.add('播', '「${_t(song)}」开始播放（第 ${_mm(resume ?? Duration.zero)}，$_how）');
       if (_speed != 1.0) {
         try {
           await _ap.setSpeed(_speed);
@@ -343,6 +435,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       failedSong = song;
       error = humanizeError(e);
       _lastFailVip = looksLikeVipWall(error);
+      AppLog.add('链', '「${_t(song)}」取不到声音：$error');
       // 一路跳歌时只报第一次：现在一首失败到下一首只要一秒多，每首都弹一条
       // 就成了刷屏。播放页上那句错误说明照旧留着。
       if (_failStreak == 0) errorTick++;
@@ -357,11 +450,21 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 连不上网时停在当前这首等一等，而不是把队列跳过去。返回 true 表示已安排重试。
   bool _retryOnNetworkLoss(Object e, int gen) {
-    if (!looksLikeNetworkFailure(e) || _netRetries >= _netRetryDelays.length) return false;
+    if (!looksLikeNetworkFailure(e)) return false;
+    return _waitAndRetry(gen, first: '网络断了，恢复后会自动接着放');
+  }
+
+  /// 断流重连。Exo 回来的只有一句 `source error`，写不出「连不上」的字样，
+  /// 但表现一模一样，所以这里不按错误文本判，只看「确实播出去过几秒」。
+  bool _retryOnStreamDrop(int gen) => _waitAndRetry(gen, first: '播放断流了，恢复后会自动接着放');
+
+  /// 等一等再重试当前这一首：间隔逐次拉长，[_netRetryDelays.length] 轮还不行才认输，
+  /// 让调用方接着走原来的路（报错 / 跳下一首）。
+  bool _waitAndRetry(int gen, {required String first}) {
+    if (_netRetries >= _netRetryDelays.length) return false;
     final secs = _netRetryDelays[_netRetries++];
-    notice = _netRetries == 1
-        ? '网络断了，恢复后会自动接着放'
-        : '$secs 秒后再试一次';
+    notice = _netRetries == 1 ? first : '$secs 秒后再试一次';
+    AppLog.add('试', '第 $_netRetries 次重连：等 $secs 秒（$first）');
     noticeTick++;
     notifyListeners();
     _netRetry?.cancel();
@@ -390,6 +493,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       error = _lastFailVip
           ? '$scope都撞在会员墙上，暂时没有能播的版本；可在列表页「整单找免费版」再试'
           : '$scope都放不出来，多半是网络；跑一次「音源自检」能看出是哪个曲库不通';
+      AppLog.add('跳', '$scope都放不出，停在这里：$error');
       // 不递增 errorTick 的话，main.dart 只认 tick 变化，这句话永远不会弹出来。
       errorTick++;
       notifyListeners();
@@ -397,6 +501,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     }
     unawaited(Future<void>.delayed(const Duration(milliseconds: 700), () {
       if (gen != _generation) return;
+      AppLog.add('跳', '连着 $_failStreak 首放不出，跳到下一首');
       unawaited(next());
     }));
   }
@@ -407,14 +512,19 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   Future<AudioSource> _sourceFor(Song song) async {
     final local = LibraryStore.instance.localFile(song);
     if (local != null) {
+      _how = '本机下载的文件';
       return AudioSource.file(local, tag: _mediaItem(song));
     }
     final resolver = _urlResolver;
     if (resolver == null) throw Exception('播放组件还没就绪，请重启应用');
     final quality = AppSettings.instance.quality;
     final pre = await AudioPrefetch.instance.path(song, quality);
-    if (pre != null) return AudioSource.file(pre, tag: _mediaItem(song));
+    if (pre != null) {
+      _how = '提前备好的 $quality';
+      return AudioSource.file(pre, tag: _mediaItem(song));
+    }
     final url = await resolver(song, quality);
+    _how = '现取 $quality';
     // B 站的音频直链要带 Referer，不带实测大约三成就 403；其他源的地址多这个头没影响，
     // 所以只在 bl 这一档加，别把播放路径上凭空多出的代理算子留给所有人。
     return AudioSource.uri(Uri.parse(url),
@@ -466,9 +576,14 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
 
   void _onTrackEnd() {
     if (queue.isEmpty) return;
+    final cur = current;
+    if (cur == null) return;
+    // 听完比「点开过」强得多：整首都记上。位置取总时长，在线流的 duration
+    // 有时不报，退回曲库里现成的那个 interval。
+    _endNoted = LibraryStore.keyOf(cur);
+    _noteHeard(cur, heard: _currentTotal ?? _lastHeard, completed: true);
     switch (playMode) {
       case PlayMode.single:
-        final cur = queue[index];
         if (LibraryStore.instance.hasLocalFile(cur)) {
           unawaited(_ap.seek(Duration.zero));
           unawaited(_ap.play());
@@ -488,6 +603,15 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
           unawaited(_ap.pause());
         }
     }
+  }
+
+  /// 把「这首听到哪、听完了没有」交给曲库记账。
+  ///
+  /// 听不满十秒就跳走的不算信号：那多半是撞在放不出、或者她手滑点开又收回，
+  /// 把它当成喜欢会把推荐一路带偏到一堆她其实没听进去的歌上。
+  void _noteHeard(Song s, {required Duration heard, required bool completed}) {
+    if (!completed && heard.inSeconds < 10) return;
+    LibraryStore.instance.noteHeard(s, heardSeconds: heard.inSeconds, completed: completed);
   }
 
   int _randomOther() {
@@ -646,6 +770,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _netRetry?.cancel();
     _netRetry = null;
     _netRetries = 0;
+    _resumeAt = null;
+    _resumeKey = null;
+    _lastHeard = Duration.zero;
     AudioPrefetch.instance.cancelRunning();
     queue.clear();
     index = -1;
@@ -910,6 +1037,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     unawaited(_stateSub?.cancel());
     unawaited(_playingSub?.cancel());
     unawaited(_positionSub?.cancel());
+    unawaited(_errorSub?.cancel());
     unawaited(_ap.dispose());
     super.dispose();
   }

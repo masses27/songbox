@@ -138,4 +138,26 @@ void main() {
       expect(out, ['a', 'live', 'inst']);
     });
   });
+
+  group('「这首放不出」的标记值不值得落盘', () {
+    // 标记一打就是半天（会员歌一周），期间播放器直接跳过、补测也不再问。
+    // 打错了的代价是「网络好了歌还是放不出」，所以这两条门槛钉死。
+    final deadline = DateTime(2026, 10, 21, 12);
+
+    test('接口都答了话、链子也跑完了，才算真的没有', () {
+      expect(BuiltinLibrary.deadWarranted(false, DateTime(2026, 10, 21, 11, 59), deadline), isTrue);
+    });
+
+    test('断网或风控那一次不算 —— 网络一回来还得能再试', () {
+      expect(BuiltinLibrary.deadWarranted(true, DateTime(2026, 10, 21, 11, 59), deadline), isFalse);
+    });
+
+    test('时间预算用到头也不算：那时候还有候选没试过', () {
+      expect(
+        BuiltinLibrary.deadWarranted(false, deadline.add(const Duration(milliseconds: 1)), deadline),
+        isFalse,
+      );
+      expect(BuiltinLibrary.deadWarranted(false, deadline, deadline), isFalse);
+    });
+  });
 }

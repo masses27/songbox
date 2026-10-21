@@ -271,6 +271,38 @@ Future<void> _newPlaylist(BuildContext context) async {
   Navigator.push(context, MaterialPageRoute(builder: (_) => UserPlaylistPage(playlistId: created.id)));
 }
 
+/// 最近播放摊成 200 行连成一片时，「昨天那首」和「上周那首」看不出差别。
+/// 按天分段之后这一列读得通：返回的是「标题字符串或一首歌」，两个视图共用同一种铺法。
+List<Object> _historyItems(LibraryStore store, List<Song> list, {int limit = 0}) {
+  final out = <Object>[];
+  String? last;
+  var songs = 0;
+  for (final s in list) {
+    if (limit > 0 && songs >= limit) break;
+    final label = LibraryStore.dayLabel(store.playStat(s)?.at ?? 0);
+    if (label != last) {
+      out.add(label.isEmpty ? '更早' : label);
+      last = label;
+    }
+    out.add(s);
+    songs++;
+  }
+  return out;
+}
+
+Widget _dayHeader(String label) => Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 12, 2),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+    );
+
+/// 这一列到底是歌还是日期：日期行前面不再画分隔线，否则分段标题上下各一条，像表格。
+Widget _rowDivider(List<Object> items, int i) =>
+    i == 0 || items[i] is String || items[i - 1] is String
+        ? const SizedBox.shrink()
+        : Divider(height: 1, color: AppTheme.divider);
+
 class _Section extends StatefulWidget {
   final LibraryKind kind;
   final IconData icon;
@@ -284,6 +316,22 @@ class _Section extends StatefulWidget {
 
 class _SectionState extends State<_Section> {
   bool _expanded = false;
+
+  Widget _songRow(LibraryStore store, List<Song> list, Song s) => SongListRow(
+        song: s,
+        siblings: list,
+        active: context.select<PlayerService, bool>((p) => p.isCurrent(s)),
+        extraTrailing: _RemoveButton(kind: widget.kind, song: s),
+      );
+
+  /// 最近播放顺手答一句「这周听了多少」：列表长度只是她攒了多少，
+  /// 而这一句才是她在用这个 App。
+  String _subtitle(LibraryStore store, List<Song> list) {
+    if (list.isEmpty) return widget.empty;
+    if (widget.kind != LibraryKind.recent) return '共 ${list.length} 首';
+    final week = store.playsInLastDays(7);
+    return week > 0 ? '共 ${list.length} 首 · 这周播了 $week 次' : '共 ${list.length} 首';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -303,7 +351,7 @@ class _SectionState extends State<_Section> {
             child: Icon(widget.icon, color: AppTheme.primary, size: 22),
           ),
           title: Text(widget.title),
-          subtitle: Text(list.isEmpty ? widget.empty : '共 ${list.length} 首',
+          subtitle: Text(_subtitle(store, list),
               style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           children: list.isEmpty
               ? const [SizedBox(height: 4)]
@@ -326,13 +374,12 @@ class _SectionState extends State<_Section> {
                         ),
                       ),
                     ),
-                  for (var i = 0; i < list.length && i < 50; i++)
-                    SongListRow(
-                      song: list[i],
-                      siblings: list,
-                      active: context.select<PlayerService, bool>((p) => p.isCurrent(list[i])),
-                      extraTrailing: _RemoveButton(kind: widget.kind, song: list[i]),
-                    ),
+                  // 只有最近播放按天分段：另两列本来就是「攒着」，不按时间读。
+                  if (widget.kind == LibraryKind.recent)
+                    for (final it in _historyItems(store, list, limit: 50))
+                      if (it is String) _dayHeader(it) else _songRow(store, list, it as Song)
+                  else
+                    for (var i = 0; i < list.length && i < 50; i++) _songRow(store, list, list[i]),
                   if (list.length > 50)
                     ListTile(
                       dense: true,
@@ -474,7 +521,10 @@ class _FullListPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final list = context.watch<LibraryStore>().list(kind);
+    final store = context.watch<LibraryStore>();
+    final list = store.list(kind);
+    final grouped = kind == LibraryKind.recent;
+    final items = grouped ? _historyItems(store, list) : List<Object>.from(list);
     return Scaffold(
       appBar: AppBar(
         title: Text('$title · ${list.length}'),
@@ -493,15 +543,21 @@ class _FullListPage extends StatelessWidget {
           ? const EmptyState(message: '这个列表已经空了')
           : ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: list.length,
-              separatorBuilder: (_, _) => Divider(height: 1, color: AppTheme.divider),
-              itemBuilder: (context, i) => SongListRow(
-                song: list[i],
-                number: i + 1,
-                siblings: list,
-                active: context.select<PlayerService, bool>((p) => p.isCurrent(list[i])),
-                extraTrailing: _RemoveButton(kind: kind, song: list[i]),
-              ),
+              itemCount: items.length,
+              separatorBuilder: (_, i) => _rowDivider(items, i),
+              itemBuilder: (context, i) {
+                final it = items[i];
+                if (it is String) return _dayHeader(it);
+                final s = it as Song;
+                return SongListRow(
+                  song: s,
+                  // 分过段之后序号只是行号，日期才是她要找的东西；没分段时保留网易云那种编号。
+                  number: grouped ? null : i + 1,
+                  siblings: list,
+                  active: context.select<PlayerService, bool>((p) => p.isCurrent(s)),
+                  extraTrailing: _RemoveButton(kind: kind, song: s),
+                );
+              },
             ),
     );
   }

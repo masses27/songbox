@@ -1,10 +1,10 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lyric_music/library/taste_profile.dart';
 import 'package:lyric_music/models/results.dart';
 import 'package:lyric_music/models/song.dart';
 import 'package:lyric_music/music_sdk/wy_search.dart';
-import 'package:lyric_music/ui/pages/daily_page.dart';
 import 'package:lyric_music/ui/rank_groups.dart';
 import 'package:lyric_music/util/humanize.dart';
 
@@ -49,26 +49,144 @@ void main() {
     });
   });
 
-  group('pickToday', () {
+  group('今日私荐的挑选', () {
     final pool = List.generate(30, (i) => Song(songmid: '$i', name: '歌$i'));
 
-    test('同一天抽到的批次固定', () {
-      final a = pickToday(pool, at: DateTime(2026, 10, 14));
-      final b = pickToday(pool, at: DateTime(2026, 10, 14));
+    test('还没听出口味时，同一天抽到的批次固定', () {
+      final a = Taste.empty.rank(pool, count: 12, at: DateTime(2026, 10, 14));
+      final b = Taste.empty.rank(pool, count: 12, at: DateTime(2026, 10, 14));
       expect(a.map((e) => e.songmid), b.map((e) => e.songmid));
       expect(a, hasLength(12));
       expect(pool.map((e) => e.songmid), List.generate(30, (i) => '$i')); // 不打乱原池
     });
 
     test('换一天就换一批', () {
-      final a = pickToday(pool, at: DateTime(2026, 10, 14));
-      final b = pickToday(pool, at: DateTime(2026, 10, 15));
+      final a = Taste.empty.rank(pool, count: 12, at: DateTime(2026, 10, 14));
+      final b = Taste.empty.rank(pool, count: 12, at: DateTime(2026, 10, 15));
       expect(a.map((e) => e.songmid).toList(), isNot(equals(b.map((e) => e.songmid).toList())));
     });
 
     test('池子不足时原样返回', () {
-      final small = pool.take(5).toList();
-      expect(pickToday(small), hasLength(5));
+      expect(Taste.empty.rank(pool.take(5).toList(), count: 12), hasLength(5));
+    });
+
+    test('反复听完的那位歌手，新歌会排到前面', () {
+      final now = DateTime(2026, 10, 21);
+      final liked = Song(source: 'wy', songmid: 'a', name: '她听过的', singer: '陈绮贞', interval: 200);
+      final taste = Taste.from(
+        favorites: const [],
+        recent: [liked],
+        playlistSongs: const [],
+        stats: {
+          'wy:a': (plays: 4, done: 3, heard: 200, at: now.millisecondsSinceEpoch)
+        },
+        at: now,
+      );
+      final cands = [
+        Song(source: 'wy', songmid: 'x', name: '别人的歌', singer: '某人'),
+        Song(source: 'wy', songmid: 'y', name: '陈绮贞新歌', singer: '陈绮贞'),
+      ];
+      expect(taste.rank(cands, count: 1, at: now).single.songmid, 'y');
+      expect(taste.topArtists(), ['陈绮贞']);
+    });
+
+    test('界面上报的是她见过的那个写法，匹配才忽略大小写', () {
+      final now = DateTime(2026, 10, 21);
+      final taste = Taste.from(
+        favorites: const [],
+        recent: [Song(source: 'wy', songmid: 'b', name: 'Someone Like You', singer: 'ADELE')],
+        playlistSongs: [Song(source: 'wy', songmid: 'a', name: 'Rolling in the Deep', singer: 'Adele')],
+        stats: {
+          'wy:b': (plays: 2, done: 0, heard: 0, at: now.millisecondsSinceEpoch),
+        },
+        at: now,
+      );
+      expect(taste.artists.keys, ['adele'], reason: '两个写法要算成同一个人');
+      expect(taste.topArtists(), ['Adele']);
+    });
+
+    test('合作曲里每个署名都算一份', () {      final now = DateTime(2026, 10, 21);
+      final taste = Taste.from(
+        favorites: [Song(source: 'wy', songmid: 'a', name: '合唱', singer: '王力宏、张靓颖')],
+        recent: const [],
+        playlistSongs: const [],
+        stats: const {},
+        at: now,
+      );
+      expect(taste.artists.keys, containsAll(['王力宏', '张靓颖']));
+    });
+
+    test('半年前沉迷过的人，不该还占着今天的位置', () {
+      final now = DateTime(2026, 10, 21);
+      double weightAt(int daysAgo) {
+        final t = Taste.from(
+          favorites: const [],
+          recent: [Song(source: 'wy', songmid: 'a', name: '老歌', singer: '某人', interval: 200)],
+          playlistSongs: const [],
+          stats: {
+            'wy:a': (plays: 3, done: 1, heard: 200, at: now.subtract(Duration(days: daysAgo)).millisecondsSinceEpoch)
+          },
+          at: now,
+        );
+        return t.artists['某人']!;
+      }
+
+      expect(weightAt(1), greaterThan(weightAt(120)));
+    });
+
+    test('听得很熟的歌不再端上来，同歌手的新歌照样上来', () {
+      final now = DateTime(2026, 10, 21);
+      final heard = Song(source: 'wy', songmid: 'a', name: '听了八遍', singer: '某人', interval: 200);
+      final taste = Taste.from(
+        favorites: const [],
+        recent: [heard],
+        playlistSongs: const [],
+        stats: {
+          'wy:a': (plays: 8, done: 4, heard: 200, at: now.millisecondsSinceEpoch)
+        },
+        at: now,
+      );
+      expect(taste.wornOut, contains('wy:a'));
+      final ranked = taste.rank([
+        Song(source: 'wy', songmid: 'b', name: '某人的新歌', singer: '某人'),
+        Song(source: 'wy', songmid: 'c', name: '路人歌', singer: '路人'),
+        heard,
+      ], count: 2, at: now);
+      expect(ranked.map((e) => e.songmid).toList(), contains('b'));
+      expect(ranked.map((e) => e.songmid).toList(), isNot(contains('a')));
+    });
+
+    test('整池都听厌了也不能空着：宁可重复', () {
+      final now = DateTime(2026, 10, 21);
+      Song old(String id) =>
+          Song(source: 'wy', songmid: id, name: '老歌$id', singer: '某人', interval: 200);
+      final taste = Taste.from(
+        favorites: const [],
+        recent: [old('a'), old('b')],
+        playlistSongs: const [],
+        stats: {
+          'wy:a': (plays: 8, done: 4, heard: 200, at: now.millisecondsSinceEpoch),
+          'wy:b': (plays: 7, done: 3, heard: 200, at: now.millisecondsSinceEpoch),
+        },
+        at: now,
+      );
+      expect(taste.wornOut.length, 2);
+      expect(taste.rank([old('a'), old('b')], count: 1, at: now), hasLength(1));
+    });
+
+    test('会员墙后面的歌扣分：这台手机上它多半要绕一整条换源链子', () {
+      final now = DateTime(2026, 10, 21);
+      final taste = Taste.from(
+        favorites: const [],
+        recent: const [],
+        playlistSongs: const [],
+        stats: const {},
+        at: now,
+      );
+      expect(
+        taste.scoreOf(Song(source: 'wy', songmid: 'v', name: '会员歌', singer: '某人', fee: 1)),
+        lessThan(taste.scoreOf(Song(source: 'wy', songmid: 'f', name: '免费歌', singer: '某人'))),
+      );
     });
   });
 

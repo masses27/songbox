@@ -15,6 +15,7 @@ import '../../music_sdk/wy_catalog.dart';
 import '../../music_sdk/wy_leaderboard.dart';
 import '../../music_sdk/wy_native.dart';
 import '../../music_sdk/wy_search.dart';
+import '../../util/app_log.dart';
 import '../../util/humanize.dart';
 import '../../util/memo.dart';
 
@@ -217,6 +218,7 @@ class BuiltinLibrary {
         final url = await _attempt(twin, q, F, deadline, prefix: '换源 ${twin.source}：');
         if (url != null) {
           // 记住这次的成功：下次同一首直接放这条，整首队列也不再撞墙。
+          AppLog.add('换', '「${_short(song.name)}」换到 ${twin.source} 的「${_short(twin.name)}」拿到了链接');
           LibraryStore.instance.rememberSwapSong(song, twin);
           return url;
         }
@@ -226,19 +228,34 @@ class BuiltinLibrary {
 
     // 「这首放不出」的标记一打就是几小时到一周，只有确确实实是歌的问题才配打：
     // 断网、风控算 flaky，跑到时间预算用完也算——那时候还有几条没试过呢。
-    final mark = !F.flaky && !DateTime.now().isAfter(deadline);
+    final mark = deadWarranted(F.flaky, DateTime.now(), deadline);
+    AppLog.add('链', '「${_short(song.name)}」整条链子走完还是放不出：${F.lines.join(' / ')}');
     if (song.needsVip) {
-      if (mark) LibraryStore.instance.markSwapDead(song);
+      if (mark) _markDead(song);
       // 提示条上就带「换版本」按钮，这句话不必再教她怎么长按。
       throw Exception('这首是网易云会员专享，B 站和别的源上也没找到能放的同一版本');
     }
     if (F.lines.any((f) => f.contains('VIP'))) {
-      if (mark) LibraryStore.instance.markSwapDead(song);
+      if (mark) _markDead(song);
       throw Exception('这首是网易云会员专享，其他源也没找到能播的版本');
     }
-    if (mark) LibraryStore.instance.markSwapDead(song);
+    if (mark) _markDead(song);
     throw Exception('没能取到完整音频\n${F.lines.join('\n')}');
   }
+
+  /// 「这首确实没有能播的版本」值不值得落成一条几天的标记。
+  ///
+  /// 播放和整单补测两条链子各判一次，抄两遍迟早会走样，所以抽出来：接口答了话
+  /// （不是断网、不是风控），而且时间预算还没用完（没试过完的候选不算「没有」）。
+  static bool deadWarranted(bool flaky, DateTime now, DateTime deadline) =>
+      !flaky && now.isBefore(deadline);
+
+  static void _markDead(Song song) {
+    AppLog.add('标', '「${_short(song.name)}」记为暂时放不出，${song.needsVip ? '7 天' : '12 小时'}后再问');
+    LibraryStore.instance.markSwapDead(song);
+  }
+
+  static String _short(String s) => s.length <= 18 ? s : '${s.substring(0, 18)}…';
 
   /// 整单体检：把列表里所有会员歌一次性找一遍免费版本，结果直接落盘。
   ///
@@ -270,13 +287,14 @@ class BuiltinLibrary {
     for (final twin in await _findTwins(song, F, engine: LxEngine.active)) {
       final url = await _attempt(twin, quality, F, deadline, prefix: '体检 ${twin.source}：');
       if (url != null) {
+        AppLog.add('补', '「${_short(song.name)}」备好 ${twin.source} 的免费版');
         LibraryStore.instance.rememberSwapSong(song, twin);
         return true;
       }
     }
     // 搜索本身没回来、一路超时，或者 18 秒预算跑到头（那时候还有候选没试），
     // 都不该打「确认没有」的标记——否则网络一恢复，这首还要被跳过整整一周。
-    if (!F.flaky && !DateTime.now().isAfter(deadline)) LibraryStore.instance.markSwapDead(song);
+    if (deadWarranted(F.flaky, DateTime.now(), deadline)) _markDead(song);
     return false;
   }
 

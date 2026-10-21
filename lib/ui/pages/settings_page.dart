@@ -11,6 +11,7 @@ import '../player/player_bar.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'diagnostic_page.dart';
+import 'log_page.dart';
 
 /// 播放设置 — quality preference, cache clearing, search history, version.
 class SettingsPage extends StatelessWidget {
@@ -171,6 +172,17 @@ class SettingsPage extends StatelessWidget {
             trailing: Icon(Icons.chevron_right, color: AppTheme.textSecondary),
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const DiagnosticPage()),
+            ),
+          ),
+          Divider(height: 24, color: AppTheme.divider),
+          ListTile(
+            title: const Text('听歌日志'),
+            subtitle: Text('每次开播、换源、断流、重试都留了一行。哪首歌放不出时把它复制发我，'
+                '不用描述现象；只记歌名和结果，不记账号信息',
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
+            trailing: Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const LogPage()),
             ),
           ),
           Divider(height: 24, color: AppTheme.divider),
