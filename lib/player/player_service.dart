@@ -202,6 +202,11 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// 前几秒就断的多半是取链或文件本身的问题，从头重试才对，接着放只会反复撞同一处。
   static const _resumeFloor = Duration(seconds: 5);
 
+  /// 「地址没打开」那一回自动重取占掉的播放序号：重取走的是 [playAt]，序号必然 +1，
+  /// 所以把 +1 记下来，正好用来认出「这次失败就是重取那一趟发出来的」。不记的话，
+  /// 一首真放不出的歌会在错误回调和重取之间来回弹，永远停不下来。
+  int _sourceRetryGen = -1;
+
   /// 断流时 [_ap] 的 position 有可能已经被清回零，所以边播边把最后听到的位置留着。
   Duration _lastHeard = Duration.zero;
 
@@ -304,12 +309,39 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       AudioPrefetch.instance.drop(song, AppSettings.instance.quality);
       if (_retryOnStreamDrop(_generation)) return;
     }
+    // 从头就没打开过：手上这条地址本身是坏的（签名过期、被 CDN 拦下、换源记住的
+    // 那个版本其实放不出）。以前只报错、缓存照旧——下一次还是同一条坏地址，
+    // 这一首从此就放不出来了。
+    if (pos < _resumeFloor && _retryWithFreshSource(song)) return;
     failedSong = song;
     error = humanizeError(e);
     _lastFailVip = looksLikeVipWall(error);
     AppLog.add('播', '「${_t(song)}」放不出：$error');
     if (_failStreak == 0) errorTick++;
     notifyListeners();
+  }
+
+  /// 把这条坏地址从所有缓存里抹掉，重取一条再放一次。返回 true 表示已安排重取。
+  ///
+  /// 清缓存和重取分开看：就算这一次不重取（已经重取过一轮，那首是真放不出），
+  /// 坏地址也不能留着——不然她手动点「重试」拿到的还是同一条，这首从此就废了。
+  bool _retryWithFreshSource(Song song) {
+    if (LibraryStore.instance.hasLocalFile(song)) return false;
+    LibraryStore.instance.forgetSwapSong(song);
+    _urlStaler?.call(song, AppSettings.instance.quality);
+    AudioPrefetch.instance.drop(song, AppSettings.instance.quality);
+    // 一次播放只自动重来这一回：那 5/15/30/60 秒的等待是给断网留的，
+    // 一条打不开的地址等再久也不会自己变好，重取才是对症的那一步。
+    if (_sourceRetryGen == _generation) return false;
+    // [retry] 走 [playAt]，序号当场 +1：记下重取那一趟的序号，它要还是打不开，
+    // 就说明换一条地址也救不了这首，按正常失败往下走（记错误、跳下一首）。
+    _sourceRetryGen = _generation + 1;
+    notice = '这条音频地址没打开，重取一条再放一次';
+    noticeTick++;
+    AppLog.add('试', '「${_t(song)}」地址没打开，忘掉记住的版本重取一条');
+    notifyListeners();
+    unawaited(retry());
+    return true;
   }
 
   /// Replace the queue and start from [start]. The only entry point pages need.
@@ -407,9 +439,13 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     }
     _lastHeard = Duration.zero;
     if (resume != null) AppLog.add('播', '「${_t(song)}」要从 ${_mm(resume)} 接着放');
+    // 有没有拿到地址，决定失败该按哪条路收拾：拿不到是取链的问题（会员墙、真的没有免费版），
+    // 重取同一条链子还是拿不到；拿到了却放不出，才是那条地址本身坏了。
+    var gotUrl = false;
     try {
       final source = await _sourceFor(song).timeout(const Duration(seconds: 30));
       if (gen != _generation) return;
+      gotUrl = true;
       // 取到链接不等于放得出来：音源脚本卡住或平台层不回应时，没有超时就永远
       // 停在「加载中」，自动跳下一首也永远不会触发。
       // 续播那一趟要慢得多：Exo 得先把缓冲推到第几分钟才回话，用从零起播那 15 秒
@@ -439,13 +475,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       await _ap.play();
     } catch (e) {
       if (gen != _generation) return;
-      // 链接取到了却放不出来（过期/风控），把它从缓存里扔掉，重试才会拿新的。
-      if (LibraryStore.instance.localFile(song) == null) {
-        _urlStaler?.call(song, AppSettings.instance.quality);
-      }
-      // 预取那份也可能就是坏的（断流留下的半截），一起扔。
-      AudioPrefetch.instance.drop(song, AppSettings.instance.quality);
       if (_retryOnNetworkLoss(e, gen)) return;
+      // 地址拿到了却放不出去：这条链接本身是坏的（过期/风控），换一条才对症。
+      // 取链那一步就失败的（会员墙、真的没有免费版）不归这里，重取还是同一条链子。
+      if (gotUrl && _retryWithFreshSource(song)) return;
       failedSong = song;
       error = humanizeError(e);
       _lastFailVip = looksLikeVipWall(error);
@@ -539,10 +572,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     }
     final url = await resolver(song, quality);
     _how = '现取 $quality';
-    // B 站的音频直链要带 Referer，不带实测大约三成就 403；其他源的地址多这个头没影响，
-    // 所以只在 bl 这一档加，别把播放路径上凭空多出的代理算子留给所有人。
-    return AudioSource.uri(Uri.parse(url),
-        headers: song.source == 'bl' ? BlSource.streamHeaders : null, tag: _mediaItem(song));
+    // 防盗链头按拿到的这条地址判，不按 `song.source`：换源给的是 B 站的音轨，
+    // 队列里那一首却还写着网易云（不带 Referer 实测三成就 403）。
+    return AudioSource.uri(Uri.parse(url), headers: BlSource.headersFor(url), tag: _mediaItem(song));
   }
 
   /// just_audio_background requires a MediaItem tag on every AudioSource — it

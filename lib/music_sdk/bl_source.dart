@@ -22,6 +22,18 @@ class BlSource {
   /// 而带上一律 206。just_audio 见到 headers 会走本机代理转发，行为不变。
   static const streamHeaders = {'User-Agent': _ua, 'Referer': 'https://www.bilibili.com/'};
 
+  /// 这条地址要不要补上 B 站那对防盗链头——**只看地址，别看歌曲对象**。
+  ///
+  /// 换源拿回来的链接属于 B 站，可她队列里那一首仍然是网易云那首（`song.source`
+  /// 还是 'wy'）。以前三处播放路径都按 `song.source == 'bl'` 决定，于是「会员墙后面
+  /// 靠 B 站兜整首」这一整类歌——综艺现场、Live 版占大头——播的时候不带 Referer，
+  /// 撞上那三成就只剩一句看不懂的 Source error。
+  static Map<String, String>? headersFor(String url) => _cdn.hasMatch(url) ? streamHeaders : null;
+
+  /// B 站的音轨域名有好几个镜像（`*.bilivideo.com`、`*.mcdn.bilivideo.cn`），
+  /// 备用地址还挂在 `hdslb`/`bilibili.com` 上，按包含判比逐个列主机名稳。
+  static final RegExp _cdn = RegExp(r'bilibili\.com|bilivideo|hdslb');
+
   static final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 10),
     receiveTimeout: const Duration(seconds: 15),
@@ -96,9 +108,13 @@ class BlSource {
   static Future<List<Song>> findTwins(String name, String singer, {int? wantSec, int max = 2}) async {
     final bare = _bareName(name);
     if (bare.isEmpty) return const [];
+    // 发出去的词只留曲名和第一个歌手：网易云把合唱写成「那英、华晨宇、艾薇 Ivy」，
+    // 而现场版恰恰多半是合唱——整串丢给 B 站搜索基本搜不出东西。收紧的是关键词，
+    // 判定照旧按全部歌手算（[pickVideos] 里命中一个就算数）。
+    final firstSinger = singer.split(RegExp(r'[、&/／,，]')).first.trim();
     final body = await _api('https://api.bilibili.com/x/web-interface/search/type', {
       'search_type': 'video',
-      'keyword': '$name $singer'.trim(),
+      'keyword': firstSinger.isEmpty ? bare : '$bare $firstSinger',
       'page': 1,
     }, 'B 站搜索');
     final results = ((body['data'] as Map?)?['result'] as List?) ?? const [];

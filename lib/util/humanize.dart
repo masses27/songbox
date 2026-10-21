@@ -64,6 +64,12 @@ String humanizeError(Object e) {
   if (looksLikeNetworkFailure(e) || s.contains('ClientException')) {
     return '网络连接不通，确认手机能上网后重试';
   }
+  // 播放器那句原文是 `(0) Source error`：地址是取到了，可它打不开（签名过期、
+  // 被 CDN 拦下、本地那份是半截文件）。括号里那个数字是 ExoPlayer 的错误码，
+  // 对她没有任何信息量，得换成一句能照着做的话。
+  if (s.contains('Source error')) {
+    return '这条音频地址没打开，多半是链接过期或被平台拦了；重试会重新取一条';
+  }
   return s.length > 160 ? '${s.substring(0, 160)}…' : s;
 }
 

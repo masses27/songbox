@@ -133,6 +133,23 @@ void main() {
     });
   });
 
+  group('防盗链头看地址，不看歌曲对象', () {
+    // 换源给的是 B 站的音轨，队列里那一首却仍然写着 source=wy。以前播放/预取/下载
+    // 三处都按 `song.source == 'bl'` 决定带不带 Referer，于是会员墙后面靠 B 站兜的
+    // 那整类歌（综艺现场、Live 版）漏掉 Referer，实测三成就 403。
+    test('B 站的三条镜像和备用域名都要补头', () {
+      expect(BlSource.headersFor('https://upos-sz-mirrorbd.bilivideo.com/x/a-1-30280.m4s?deadline=1'),
+          isNotNull);
+      expect(BlSource.headersFor('https://mcdn01b.bilivideo.cn/upgcxcode/a.m4s'), isNotNull);
+      expect(BlSource.headersFor('https://proxy.bilibili.com/x/y.m4s'), isNotNull);
+    });
+
+    test('网易云和腾讯的地址原样交给播放器', () {
+      expect(BlSource.headersFor('http://m10.music.126.net/20261021/abc.mp3?vuutv=x'), isNull);
+      expect(BlSource.headersFor('https://ws.stream.qqmusic.qq.com/M50000abc.mp3'), isNull);
+    });
+  });
+
   group('被限流不等于「这首没有」', () {
     // 换源链子会把「确认没有免费版」落盘一周。整单体检一次发几十次 B 站搜索，
     // 撞上一次 412 就把那一串歌全判死，是她最难自己发现的那种坏。

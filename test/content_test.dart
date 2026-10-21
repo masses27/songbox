@@ -380,5 +380,14 @@ void main() {
       // 接口答了话、也说清了这首歌不放，那才真是没有。
       expect(looksLikeThrottle('腾讯没返回播放链接（-400515）'), isFalse);
     });
+
+    test('播放器那句 Source error 要翻成人话', () {
+      // 地址取到了却打不开（过期 / 403 / 半截文件）时，ExoPlayer 只给这一句，
+      // 括号里那个错误码对她没有任何意义。
+      final s = humanizeError(Exception('(0) Source error'));
+      expect(s, contains('地址'));
+      expect(s, contains('重试'));
+      expect(looksLikeVipWall(s), isFalse); // 翻出来的话不能顺带把歌判成会员墙
+    });
   });
 }

@@ -80,8 +80,8 @@ class AudioPrefetch {
     if (_done.containsKey(k) || _running.containsKey(k)) return;
     final token = CancelToken();
     _running[k] = token;
-    // B 站的音频直链要带 Referer，不带实测就 403——和播放那一路同一个条件。
-    unawaited(_download(k, url, token, song.source == 'bl' ? BlSource.streamHeaders : null)
+    // 防盗链头按地址判：换源给的是 B 站的音轨，而这一首在队列里仍是网易云那首。
+    unawaited(_download(k, url, token, BlSource.headersFor(url))
         .whenComplete(() => _running.remove(k)));
   }
 

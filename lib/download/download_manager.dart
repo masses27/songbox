@@ -61,8 +61,9 @@ class DownloadManager extends ChangeNotifier {
       final resp = await _dio.get<ResponseBody>(url,
           options: Options(
             responseType: ResponseType.stream,
-            // B 站的音频直链要带 Referer，不带实测就 403（和播放、预取同一条件）。
-            headers: task.song.source == 'bl' ? BlSource.streamHeaders : null,
+            // 防盗链头按地址判（和播放、预取同一条件）：下载会员墙后面的歌时，
+            // 拿到的链接属于 B 站，任务里那首歌却还写着网易云。
+            headers: BlSource.headersFor(url),
           ),
           cancelToken: task.token,
           onReceiveProgress: (r, t) {
