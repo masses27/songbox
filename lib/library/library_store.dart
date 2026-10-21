@@ -500,12 +500,12 @@ class LibraryStore extends ChangeNotifier {
     if (keyOf(s) == keyOf(twin)) return;
     _swaps[keyOf(s)] = twin;
     _deadUntil.remove(keyOf(s));
-    _writeVip();
+    _markVip();
   }
 
   /// 缓存的那条也可能失效（音源换了、下架了），忘掉它让下次重新找。
   void forgetSwapSong(Song s) {
-    if (_swaps.remove(keyOf(s)) != null) _writeVip();
+    if (_swaps.remove(keyOf(s)) != null) _markVip();
   }
 
   /// 期限内确认过「找不到能播的版本」。到期就重新算，
@@ -515,7 +515,7 @@ class LibraryStore extends ChangeNotifier {
     if (until == null) return false;
     if (until <= DateTime.now().millisecondsSinceEpoch) {
       _deadUntil.remove(keyOf(s));
-      _writeVip();
+      _markVip();
       return false;
     }
     return true;
@@ -530,14 +530,14 @@ class LibraryStore extends ChangeNotifier {
     final ttl = s.needsVip ? _deadVip : _deadOther;
     _deadUntil[keyOf(s)] = DateTime.now().add(ttl).millisecondsSinceEpoch;
     _swaps.remove(keyOf(s));
-    _writeVip();
+    _markVip();
   }
 
   /// 换音源之后调用：旧判定是在「那批取链能力」下得出的，不能继续拦着新歌。
   void clearSwapDead() {
     if (_deadUntil.isEmpty) return;
     _deadUntil.clear();
-    _writeVip();
+    _markVip();
   }
 
   /// 列表里还需要体检的歌：会员墙后面、既没找到免费版也没确认过没有。
@@ -546,7 +546,24 @@ class LibraryStore extends ChangeNotifier {
 
   int vipReadyCount(Iterable<Song> songs) => songs.where(hasSwapSong).length;
 
-  void _writeVip() {
+  Timer? _vipAutosave;
+  bool _vipDirty = false;
+
+  /// 这个文件存的是「整张换源表」，一次写入要把所有条目重新编码一遍。
+  /// 而整单体检是几十首连着记：逐首同步落盘等于把同一张表重写几十遍，
+  /// 全在主 isolate 上——她那边就是滚动时一顿卡。和收藏一样攒 2 秒写一次，
+  /// 切后台时 [flushNow] 兜底。
+  void _markVip() {
+    _vipDirty = true;
+    _vipAutosave?.cancel();
+    _vipAutosave = Timer(const Duration(seconds: 2), _flushVip);
+  }
+
+  void _flushVip() {
+    _vipAutosave?.cancel();
+    _vipAutosave = null;
+    if (!_vipDirty) return;
+    _vipDirty = false;
     JsonFile.write(_vipFile, {
       'swaps': _swaps.map((k, v) => MapEntry(k, v.toJson())),
       'dead': _deadUntil,
@@ -645,6 +662,8 @@ class LibraryStore extends ChangeNotifier {
     _flush();
     _statsAutosave?.cancel();
     _flushStats();
+    _vipAutosave?.cancel();
+    _flushVip();
     _writePaths();
     _writePlaylists();
   }

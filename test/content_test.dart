@@ -372,6 +372,13 @@ void main() {
       expect(looksLikeThrottle('网易云搜索被限流：code=405 且没带结果，过一会儿再试'), isTrue);
       expect(looksLikeThrottle('网易云搜索被限流：回的不是 JSON（HTTP 200）'), isTrue);
       expect(looksLikeThrottle('网易云搜索没有这首歌'), isFalse);
+      // 各家接口的风控页都长这样：回的压根不是 JSON，只能落到「返回异常」这一句上。
+      // 判成「这首真的没有」的话，一首好歌要被跳过一周。
+      expect(looksLikeThrottle('网易云接口返回异常（HTTP 200）'), isTrue);
+      expect(looksLikeThrottle('B 站播放 返回异常（HTTP 200）'), isTrue);
+      expect(looksLikeThrottle('B 站播放 回 code -352：风控校验失败'), isTrue);
+      // 接口答了话、也说清了这首歌不放，那才真是没有。
+      expect(looksLikeThrottle('腾讯没返回播放链接（-400515）'), isFalse);
     });
   });
 }

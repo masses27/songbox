@@ -97,7 +97,6 @@ class _AlbumPageState extends State<AlbumPage> {
                           song: _songs[i],
                           number: i + 1,
                           siblings: _songs,
-                          active: context.select<PlayerService, bool>((p) => p.isCurrent(_songs[i])),
                         ),
                       const SizedBox(height: 24),
                     ],

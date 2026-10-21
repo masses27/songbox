@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 
 import '../../models/results.dart';
 import '../../models/song.dart';
-import '../../player/player_service.dart';
 import '../../settings/app_settings.dart';
 import '../../util/humanize.dart';
 import '../player/player_bar.dart';
@@ -420,7 +419,6 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
   Widget _songTile(BuildContext context, Song s) => SongListRow(
         song: s,
         siblings: _tabs[0].items.cast<Song>(),
-        active: context.select<PlayerService, bool>((p) => p.isCurrent(s)),
       );
 
   Widget _artistTile(BuildContext context, ArtistInfo a) {

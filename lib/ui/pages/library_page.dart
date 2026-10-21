@@ -320,7 +320,6 @@ class _SectionState extends State<_Section> {
   Widget _songRow(LibraryStore store, List<Song> list, Song s) => SongListRow(
         song: s,
         siblings: list,
-        active: context.select<PlayerService, bool>((p) => p.isCurrent(s)),
         extraTrailing: _RemoveButton(kind: widget.kind, song: s),
       );
 
@@ -554,7 +553,6 @@ class _FullListPage extends StatelessWidget {
                   // 分过段之后序号只是行号，日期才是她要找的东西；没分段时保留网易云那种编号。
                   number: grouped ? null : i + 1,
                   siblings: list,
-                  active: context.select<PlayerService, bool>((p) => p.isCurrent(s)),
                   extraTrailing: _RemoveButton(kind: kind, song: s),
                 );
               },

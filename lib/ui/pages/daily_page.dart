@@ -133,7 +133,6 @@ class _DailyPageState extends State<DailyPage> {
                     song: _today[i],
                     number: i + 1,
                     siblings: _today,
-                    active: context.select<PlayerService, bool>((p) => p.isCurrent(_today[i])),
                   ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),

@@ -15,6 +15,10 @@ class Memo {
   /// 在途调用共享同一个 Future：同一首歌唱片机或列表同时请求时只发一次网络请求。
   final Map<String, Future<Object?>> _pending = {};
 
+  /// 每个键的「代数」。remove/clear 会把它加一代，让那一代之前已经在飞的调用
+  /// 回来时不再写回缓存——不然「播放失败后丢掉这条链接」会被晚到的旧结果原地复活。
+  final Map<String, int> _gen = {};
+
   Future<T> run<T>(String key, Future<T> Function() body) async {
     final hit = _store[key];
     if (hit != null && DateTime.now().difference(hit.at) < ttl) {
@@ -24,25 +28,39 @@ class Memo {
     }
     final inflight = _pending[key];
     if (inflight != null) return await inflight as T;
-    final future = body().then((value) {
-      _store[key] = (at: DateTime.now(), value: value as Object);
-      _trim();
+    final gen = _gen[key] ?? 0;
+    late final Future<Object?> future;
+    future = body().then((value) {
+      if ((_gen[key] ?? 0) == gen) {
+        _store[key] = (at: DateTime.now(), value: value as Object);
+        _trim();
+      } else {
+        _gen.remove(key);
+      }
       return value as Object?;
       // 必须是代码块而不是箭头：`whenComplete(() => _pending.remove(key))` 会把
       // remove 的返回值（正是这个 Future 自己）交给 whenComplete，而 whenComplete
       // 会等回调返回的 Future——等于等它自己，第一次调用永远不结束。
     }).whenComplete(() {
-      _pending.remove(key);
+      // 只撤自己这一次：中途被 clear 掉、别人又重新发起的那条在途调用不能跟着没了。
+      if (identical(_pending[key], future)) _pending.remove(key);
     });
     _pending[key] = future;
     return await future as T;
   }
 
   /// 丢掉一个键——播放失败后要让下次重试重新取链接。
-  void remove(String key) => _store.remove(key);
+  void remove(String key) {
+    _store.remove(key);
+    // 只有确实还在飞的那次需要记账；它回来时代数就被消费掉了，不留常驻条目。
+    if (_pending.containsKey(key)) _gen[key] = (_gen[key] ?? 0) + 1;
+  }
 
   void clear() {
     _store.clear();
+    for (final k in _pending.keys) {
+      _gen[k] = (_gen[k] ?? 0) + 1;
+    }
     _pending.clear();
   }
 

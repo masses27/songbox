@@ -50,13 +50,25 @@ class AudioPrefetch {
     final k = key(song, quality);
     final hit = _done[k];
     if (hit != null) return hit;
-    await (_scan ??= _rescan());
+    await _prime();
     return _done[k];
   }
 
   /// 开机时跑一次：把磁盘上留下的旧文件扫进内存表，顺带建好目录。
   /// 不这么做的话，第一次切歌要在播放那一跳里等完这趟磁盘往返。
-  Future<void> prime() => _scan ??= _rescan();
+  Future<void> prime() => _prime();
+
+  /// 建目录或 `list()` 本身可能抛（外部存储没挂载、权限正被系统回收）。存下来的
+  /// 那个 Future 一旦是失败的，后面每次 await 都当场炸——播放路径等于永久读不到
+  /// 本地已经下好的整首。失败就把它清掉，下次重新扫一遍。
+  Future<void> _prime() async {
+    final scan = _scan ??= _rescan();
+    try {
+      await scan;
+    } catch (_) {
+      if (identical(_scan, scan)) _scan = null;
+    }
+  }
 
   /// 内存表里已经有整首了？批量预取用这个问，别为每首歌都 await 一次磁盘扫描。
   bool has(Song song, String quality) => _done.containsKey(key(song, quality));

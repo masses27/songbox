@@ -77,7 +77,6 @@ Future<void> main() async {
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AppModel()),
         ChangeNotifierProvider(create: (_) => AppSettings.instance),
         ChangeNotifierProvider(create: (_) => LibraryStore.instance),
         ChangeNotifierProvider(create: (_) => DownloadManager.instance),
@@ -87,10 +86,6 @@ Future<void> main() async {
       child: const LyricApp(),
     ),
   );
-}
-
-class AppModel extends ChangeNotifier {
-  void refresh() => notifyListeners();
 }
 
 class LyricApp extends StatefulWidget {

@@ -1,10 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
 
 import '../../engine/lx_engine.dart';
-import '../../main.dart';
 import '../../source/source_manager.dart';
 import '../../util/humanize.dart';
 import '../player/player_bar.dart';
@@ -19,12 +17,20 @@ class SourcesPage extends StatefulWidget {
 }
 
 class _SourcesPageState extends State<SourcesPage> {
-  final _manager = SourceManager.instance
-  ;
+  final _manager = SourceManager.instance;
   bool _refreshingAll = false;
   final Set<String> _refreshingIds = {};
 
   bool _importing = false;
+
+  /// 「从链接导入」那个输入框的控制器，页面关掉就得还给框架。
+  final _urlCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _urlCtrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _importFromClipboard() async {
     if (_importing) return;
@@ -46,7 +52,6 @@ class _SourcesPageState extends State<SourcesPage> {
       _toast('导入失败：${humanizeError(e)}');
     } finally {
       if (mounted) setState(() => _importing = false);
-      _refreshModel();
     }
   }
 
@@ -54,11 +59,6 @@ class _SourcesPageState extends State<SourcesPage> {
     if (!mounted) return;
     // 统一走 toast：时长、浮起位置、和播放条的避让都在那一处定，免得每个页面各写一份。
     toast(context, msg);
-  }
-
-  void _refreshModel() {
-    if (!mounted) return;
-    context.read<AppModel>().refresh();
   }
 
   Future<void> _activate(SourceMeta m) async {
@@ -73,7 +73,6 @@ class _SourcesPageState extends State<SourcesPage> {
       _toast('启用失败：${humanizeError(e)}');
     }
     if (mounted) setState(() {});
-    _refreshModel();
   }
 
   Future<void> _refreshOne(SourceMeta m) async {
@@ -85,7 +84,6 @@ class _SourcesPageState extends State<SourcesPage> {
       _toast('更新失败：${humanizeError(e)}');
     } finally {
       if (mounted) setState(() => _refreshingIds.remove(m.id));
-      _refreshModel();
     }
   }
 
@@ -100,7 +98,6 @@ class _SourcesPageState extends State<SourcesPage> {
       _toast('更新失败：${humanizeError(e)}');
     } finally {
       if (mounted) setState(() => _refreshingAll = false);
-      _refreshModel();
     }
   }
 
@@ -113,7 +110,6 @@ class _SourcesPageState extends State<SourcesPage> {
     await _manager.remove(m.id);
     if (!mounted) return;
     setState(() {});
-    _refreshModel();
     _toast('已删除「${m.name}」');
   }
 
@@ -285,7 +281,6 @@ class _SourcesPageState extends State<SourcesPage> {
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
 
-  final _urlCtrl = TextEditingController();
   Future<void> _showUrlImport() async {
     if (_importing) return;
     _urlCtrl.clear();
@@ -324,7 +319,6 @@ class _SourcesPageState extends State<SourcesPage> {
       _toast('导入失败：${humanizeError(e)}');
     } finally {
       if (mounted) setState(() => _importing = false);
-      _refreshModel();
     }
   }
 }

@@ -173,7 +173,6 @@ class _ArtistPageState extends State<ArtistPage> {
                             song: _songs[i],
                             number: i + 1,
                             siblings: _songs,
-                            active: context.select<PlayerService, bool>((p) => p.isCurrent(_songs[i])),
                           ),
                         _songsFooter(),
                       ],

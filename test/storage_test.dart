@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -103,6 +104,29 @@ void main() {
       await memo.run('k', body);
       memo.remove('k');
       expect(await memo.run('k', body), 2);
+    });
+
+    test('丢掉的键不会被晚到的在途结果写回来', () async {
+      // 播放失败时 remove 掉那条链接，可那次取链还在飞。它回来要是直接塞回缓存，
+      // 她再点一次播放拿到的还是同一条坏地址，这一首就永远出不来声。
+      final memo = Memo();
+      final gate = Completer<int>();
+      final first = memo.run('k', () => gate.future);
+      memo.remove('k');
+      gate.complete(7);
+      expect(await first, 7); // 当下这一次调用照旧拿到值，只是不再进缓存
+      var calls = 0;
+      expect(await memo.run('k', () async => ++calls), 1);
+    });
+
+    test('清空之后晚到的在途结果也不会写回来', () async {
+      final memo = Memo();
+      final gate = Completer<int>();
+      final first = memo.run('k', () => gate.future);
+      memo.clear();
+      gate.complete(9);
+      expect(await first, 9);
+      expect(await memo.run('k', () async => 1), 1);
     });
 
     test('超过容量时先淘汰最久没用的', () async {

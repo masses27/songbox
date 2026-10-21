@@ -361,6 +361,7 @@ class _LyricView extends StatefulWidget {
 class _LyricViewState extends State<_LyricView> {
   final ScrollController _ctrl = ScrollController();
   int _scrolledTo = -1;
+  List<LyricLine>? _scrolledList;
 
   /// 手往上翻去看下一段词时，别立刻被自动滚动拽回当前那行。
   DateTime _resumeAutoAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -388,6 +389,12 @@ class _LyricViewState extends State<_LyricView> {
   }
 
   void _autoScroll(List<LyricLine> lines, int idx) {
+    if (!identical(_scrolledList, lines)) {
+      // 换了一首歌的歌词，上一首滚到第几行就不算数了：不重置的话，
+      // 新歌恰好从同一行号开始时时灵时不灵地不跟着走。
+      _scrolledList = lines;
+      _scrolledTo = -1;
+    }
     if (idx < 0 || !_ctrl.hasClients || idx == _scrolledTo) return;
     if (DateTime.now().isBefore(_resumeAutoAt)) return;
     _scrolledTo = idx;
@@ -401,86 +408,85 @@ class _LyricViewState extends State<_LyricView> {
   @override
   Widget build(BuildContext context) {
     final player = widget.player;
-    return StreamBuilder<Duration>(
-      stream: player.positionStream,
-      builder: (context, s) {
-        final lines = player.lyric;
-        if (lines.isEmpty) {
-          if (player.busy || player.lyricBusy) {
-            return const Center(
-                child: Text('歌词加载中…', style: TextStyle(color: Colors.white38)));
-          }
+    // 歌词只在「换到下一行」那一刻需要重画。以前外面包了一层 positionStream 的
+    // StreamBuilder：播放器每两百毫秒推一次位置，整屏歌词就跟着排一次，几百行的
+    // 歌词页上看得见卡顿。select 之后只有行号、歌词本身或加载状态变了才重建这段。
+    final view = context.select<PlayerService, (List<LyricLine>, int, bool, bool)>(
+        (p) => (p.lyric, p.lyricIndex, p.lyricBusy, p.busy));
+    final lines = view.$1;
+    final idx = view.$2;
+    if (lines.isEmpty) {
+      if (view.$3 || view.$4) {
+        return const Center(child: Text('歌词加载中…', style: TextStyle(color: Colors.white38)));
+      }
+      return GestureDetector(
+        onTap: player.reloadLyric,
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('暂无歌词', style: TextStyle(color: Colors.white38)),
+              SizedBox(height: 6),
+              Text('点一下重新找', style: TextStyle(color: Colors.white30, fontSize: 11)),
+            ],
+          ),
+        ),
+      );
+    }
+    _autoScroll(lines, idx);
+    return NotificationListener<UserScrollNotification>(
+      onNotification: (n) {
+        // 真手势才会发 UserScrollNotification，程序里的 animateTo 不会，
+        // 所以不用区分这一划是不是自动滚动自己引起的。
+        if (n.metrics.axis == Axis.vertical) {
+          _resumeAutoAt = DateTime.now().add(const Duration(seconds: 5));
+        }
+        return false;
+      },
+      child: ListView.builder(
+        controller: _ctrl,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: _pad),
+        itemExtentBuilder: (i, _) => _h(lines[i]),
+        itemCount: lines.length,
+        itemBuilder: (context, i) {
+          final active = i == idx;
+          final trans = lines[i].translated;
           return GestureDetector(
-            onTap: player.reloadLyric,
-            child: const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('暂无歌词', style: TextStyle(color: Colors.white38)),
-                  SizedBox(height: 6),
-                  Text('点一下重新找', style: TextStyle(color: Colors.white30, fontSize: 11)),
-                ],
-              ),
+            onTap: () {
+              player.seek(player.lyricPosition(i));
+              // 点这一行就是想从这里开始跟着走，别再压着自动滚动。
+              _resumeAutoAt = DateTime.fromMillisecondsSinceEpoch(0);
+            },
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  lines[i].text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: active ? Colors.white : Colors.white38,
+                    fontSize: active ? 17 : 14,
+                    fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+                if (trans != null && trans.isNotEmpty)
+                  Text(
+                    trans,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: active ? Colors.white70 : Colors.white24,
+                      fontSize: active ? 13 : 11.5,
+                    ),
+                  ),
+              ],
             ),
           );
-        }
-        final idx = player.lyricIndexAt(s.data ?? Duration.zero);
-        _autoScroll(lines, idx);
-        return NotificationListener<UserScrollNotification>(
-          onNotification: (n) {
-            // 真手势才会发 UserScrollNotification，程序里的 animateTo 不会，
-            // 所以不用区分这一划是不是自动滚动自己引起的。
-            if (n.metrics.axis == Axis.vertical) {
-              _resumeAutoAt = DateTime.now().add(const Duration(seconds: 5));
-            }
-            return false;
-          },
-          child: ListView.builder(
-            controller: _ctrl,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: _pad),
-            itemExtentBuilder: (i, _) => _h(lines[i]),
-            itemCount: lines.length,
-            itemBuilder: (context, i) {
-              final active = i == idx;
-              final trans = lines[i].translated;
-              return GestureDetector(
-                onTap: () {
-                  player.seek(player.lyricPosition(i));
-                  // 点这一行就是想从这里开始跟着走，别再压着自动滚动。
-                  _resumeAutoAt = DateTime.fromMillisecondsSinceEpoch(0);
-                },
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      lines[i].text,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: active ? Colors.white : Colors.white38,
-                        fontSize: active ? 17 : 14,
-                        fontWeight: active ? FontWeight.w600 : FontWeight.normal,
-                      ),
-                    ),
-                    if (trans != null && trans.isNotEmpty)
-                      Text(
-                        trans,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: active ? Colors.white70 : Colors.white24,
-                          fontSize: active ? 13 : 11.5,
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            },
-          ),
-        );
-      },
+        },
+      ),
     );
   }
 }

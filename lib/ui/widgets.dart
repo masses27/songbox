@@ -353,7 +353,6 @@ class SongListRow extends StatelessWidget {
 
   /// The list this row belongs to — used for the default "play from here".
   final List<Song>? siblings;
-  final bool active;
   final VoidCallback? onTap;
 
   /// Shown before the ♥ — used by 我的 页 to put a 移出列表 button on a row.
@@ -363,7 +362,6 @@ class SongListRow extends StatelessWidget {
     required this.song,
     this.number,
     this.siblings,
-    this.active = false,
     this.onTap,
     this.extraTrailing,
   });
@@ -373,6 +371,10 @@ class SongListRow extends StatelessWidget {
     // 只订阅自己这一行的收藏状态：watch<LibraryStore>() 会让整列表在
     // 任意收藏/最近播放变化时重建。
     final fav = context.select<LibraryStore, bool>((s) => s.isFavorite(song));
+    // 「正在播的这一首」同理。以前由列表算好传进来：那些列表都是父级一个 context
+    // 里循环 select 的，一次切歌要么整列表重建，要么标记落在别的行为上——几百首的歌单
+    // 每几秒整表重建一次，滚动时看得见掉帧。
+    final active = context.select<PlayerService, bool>((p) => p.isCurrent(song));
     final store = LibraryStore.instance;
     final sub = [
       song.singer,

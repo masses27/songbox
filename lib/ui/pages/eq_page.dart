@@ -59,6 +59,8 @@ class _EqPageState extends State<EqPage> {
                         } else {
                           await player.disableEq();
                         }
+                        // 挂效果器要等一次本机调用，这期间她可能已经退出去了。
+                        if (!mounted) return;
                         setState(() {});
                       },
                     ),
@@ -73,6 +75,7 @@ class _EqPageState extends State<EqPage> {
                         subtitle: Text(preset.gains.map((g) => g == 0 ? '0' : (g > 0 ? '+$g' : '$g')).join('  ')),
                         onTap: () async {
                           await player.applyPreset(preset);
+                          if (!mounted) return;
                           setState(() {});
                         },
                       ),

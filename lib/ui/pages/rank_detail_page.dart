@@ -158,8 +158,6 @@ class _RankDetailPageState extends State<RankDetailPage> {
                                   song: s,
                                   number: i + 1,
                                   siblings: _songs,
-                                  active:
-                                      context.select<PlayerService, bool>((p) => p.isCurrent(s)),
                                 );
                               },
                             ),

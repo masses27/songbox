@@ -17,7 +17,7 @@ class AppSettings extends ChangeNotifier {
 
   /// 和 pubspec.yaml 同步；build.sh 每次打包前按 pubspec 改写这一行，
   /// 「关于」上写错版本号会把她截图里的版本带偏，而排查全靠那句版本。
-  static const appVersion = '0.8.23';
+  static const appVersion = '0.8.24';
 
   String quality = '320k';
   final List<String> searchHistory = [];

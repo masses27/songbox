@@ -145,6 +145,11 @@ class DownloadManager extends ChangeNotifier {
 
   /// Bulk delete used by the settings page; returns how many files went away.
   Future<int> deleteAllDownloads() async {
+    // 先把还在下的取消掉：不取消的话，这一轮清空跑完它们还在往文件里写，
+    // 写完又把路径记回库里——界面上就是「明明清了，过一会儿又冒出一首」。
+    for (final t in _tasks.values) {
+      if (t.running) t.token.cancel('清空下载');
+    }
     var n = 0;
     for (final song in LibraryStore.instance.list(LibraryKind.downloaded)) {
       final path = LibraryStore.instance.localFile(song);

@@ -35,9 +35,25 @@ class BlSource {
   /// 这枚号 `finger/spi` 随便问一次就给，跟账号无关，所以一次开屏拿一枚就够。
   static String? _buvid;
 
+  /// 取号这一步也在并发路径上：整单体检时十几首同时搜 B 站，一人问一次会把
+  /// `finger/spi` 打十几遍。共享同一次在途请求。
+  static Future<String>? _fetching;
+
   static Future<String> _buvid3() async {
     final have = _buvid;
     if (have != null) return have;
+    final running = _fetching;
+    if (running != null) return running;
+    late final Future<String> f;
+    f = _askBuvid3().whenComplete(() {
+      // 只撤自己这一次，别把失败后重新发起的那次也带走。
+      if (identical(_fetching, f)) _fetching = null;
+    });
+    // 挂上必须在任何 await 之前：两首同时搜 B 站时，第二首要能看到这一趟在飞。
+    return _fetching = f;
+  }
+
+  static Future<String> _askBuvid3() async {
     try {
       final resp = await _dio.get('https://api.bilibili.com/x/frontend/finger/spi');
       final data = resp.data;
@@ -57,6 +73,9 @@ class BlSource {
         queryParameters: query, options: Options(headers: {'Cookie': 'buvid3=${await _buvid3()}'}));
     if (resp.statusCode == 412) {
       // 风控页是一段 HTML，走下面的「回的不是 JSON」只会让她看见一句天书。
+      // 带着设备号还被拦，说明这枚号本身被记黑了：抱着它重试等于这一次开屏再也搜不了
+      // B 站，扔掉，下次问一枚新的。
+      _buvid = null;
       throw Exception('$label 把这次请求当成爬虫拦下了（HTTP 412），过一会儿再试');
     }
     final raw = resp.data;

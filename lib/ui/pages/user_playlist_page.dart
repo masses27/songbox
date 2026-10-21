@@ -127,7 +127,6 @@ class _UserPlaylistPageState extends State<UserPlaylistPage> {
                             return SongListRow(
                               song: s,
                               siblings: songs,
-                              active: context.select<PlayerService, bool>((p) => p.isCurrent(s)),
                               extraTrailing: IconButton(
                                 icon: Icon(Icons.close, size: 18, color: AppTheme.textSecondary),
                                 tooltip: '从本歌单移除',

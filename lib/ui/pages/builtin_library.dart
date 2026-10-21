@@ -164,6 +164,10 @@ class BuiltinLibrary {
   /// 单次尝试最多愿意等多久（音源脚本正常一两秒就回，等太久的那次多半也不会成）。
   static const _tryBudget = Duration(seconds: 10);
 
+  /// 端内自己就能取链的平台：这些歌没启用音源脚本也有一条出声的路。
+  /// 判据要跟 [_attempt] 里的分支对上，漏一个就等于这类歌白跑一趟换源。
+  static const inAppSources = {'wy', 'tx', 'bl'};
+
   /// Resolve a playable URL by walking an attempt chain: whatever the app can
   /// fetch on-device goes first, then the enabled lx-music source picks up
   /// anything the direct path could not deliver. A quality that comes back
@@ -196,7 +200,7 @@ class BuiltinLibrary {
     if (song.needsVip) ladder = ladder.take(2).toList();
     final engine = LxEngine.active;
     final hasEngine = engine != null && engine.inited;
-    final direct = song.source == 'wy';
+    final direct = inAppSources.contains(song.source);
 
     if (direct && song.needsVip) {
       F.add('端内直连：VIP 专属（网易云这首要会员，直接去换源）');
@@ -206,6 +210,8 @@ class BuiltinLibrary {
       for (final q in ladder) {
         final url = await _attempt(song, q, F, deadline);
         if (url != null) return url;
+        // B 站匿名整首只有 192k 一档，退音质只是把同一条接口再问一遍。
+        if (song.source == 'bl') break;
         // 这个音源压根不覆盖该平台，降音质也只是把同一句「不支持」再问一遍。
         if (!direct && !_supports(engine!, song.source)) break;
         if (DateTime.now().isAfter(deadline)) break;
@@ -213,7 +219,7 @@ class BuiltinLibrary {
     }
 
     // 会员墙后面往往就是另一平台的免费版；网易云自己的热单能省一半，靠的是这一步。
-    for (final twin in await _findTwins(song, F, engine: engine)) {
+    for (final twin in await _findTwins(song, F, engine: engine, deadline: deadline)) {
       for (final q in ladder.take(2)) {
         final url = await _attempt(twin, q, F, deadline, prefix: '换源 ${twin.source}：');
         if (url != null) {
@@ -275,6 +281,11 @@ class BuiltinLibrary {
         done++;
       }
       onProgress?.call(done, todo.length);
+      if (i + 2 >= todo.length) break;
+      // 一批推一批、中间不留空隙，四五个平台的搜索接口连着问几十遍，出口 IP
+      // 看着就是爬虫——撞上一次限流，这一轮的歌全被判成「确实没有免费版」。
+      await Future.delayed(const Duration(milliseconds: 1500));
+      if (cancelled?.call() ?? false) break;
     }
     return (fixed: fixed, dead: dead, total: todo.length);
   }
@@ -284,7 +295,7 @@ class BuiltinLibrary {
     final F = _Failures();
     final deadline = DateTime.now().add(const Duration(seconds: 18));
     final quality = AppSettings.instance.quality;
-    for (final twin in await _findTwins(song, F, engine: LxEngine.active)) {
+    for (final twin in await _findTwins(song, F, engine: LxEngine.active, deadline: deadline)) {
       final url = await _attempt(twin, quality, F, deadline, prefix: '体检 ${twin.source}：');
       if (url != null) {
         AppLog.add('补', '「${_short(song.name)}」备好 ${twin.source} 的免费版');
@@ -372,12 +383,17 @@ class BuiltinLibrary {
 
   /// 换源候选：网易云自己库里同一首歌常有第二条不花钱的 id（精选集、重新上架），
   /// 先试它，再试酷我。返回最多两条，调用方按顺序逐条取链。
-  Future<List<Song>> _findTwins(Song song, _Failures F, {required LxEngine? engine}) async {
+  ///
+  /// [deadline] 是调用方那条链子的时间预算：找候选这一步本身要发四五个搜索请求，
+  /// 预算用完了还继续发，拿回来的候选也来不及取链，白白多撞几次平台的频率限制。
+  Future<List<Song>> _findTwins(Song song, _Failures F,
+      {required LxEngine? engine, DateTime? deadline}) async {
     final keyword = '${song.name} ${song.singer}'.trim();
     if (keyword.isEmpty) return const [];
     final out = <Song>[];
     Future<void> searchOn(String target) async {
       if (out.length >= 2) return;
+      if (deadline != null && DateTime.now().isAfter(deadline)) return;
       final label = target == 'bl' ? 'B 站' : target;
       // wy/kw/tx/bl 的搜索是端内直连；其他平台只能靠她启用的那个音源脚本。
       final native = target == 'wy' || target == 'kw' || target == 'tx' || target == 'bl';

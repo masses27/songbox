@@ -27,6 +27,10 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop {
   bool _loading = false;
   String? _error;
 
+  /// 换榜单源、下拉刷新会各起一次请求，回来的顺序不讲道理：只认最后发起那一趟，
+  /// 不然慢的那趟把刚切好的源盖回旧榜单。
+  int _loadGen = 0;
+
   @override
   void initState() {
     super.initState();
@@ -46,6 +50,7 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop {
   }
 
   Future<void> _load({bool refresh = false}) async {
+    final gen = ++_loadGen;
     setState(() {
       _loading = true;
       _error = null;
@@ -57,11 +62,11 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop {
         _sheetBlockKey.currentState?.reload();
       }
       final list = await lib.rankList(_rankSource);
-      if (mounted) setState(() => _ranks = list);
+      if (mounted && gen == _loadGen) setState(() => _ranks = list);
     } catch (e) {
-      if (mounted) setState(() => _error = humanizeError(e));
+      if (mounted && gen == _loadGen) setState(() => _error = humanizeError(e));
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && gen == _loadGen) setState(() => _loading = false);
     }
   }
 
@@ -180,6 +185,9 @@ class _SheetCategoriesState extends State<_SheetCategories> {
   int _offset = 0;
   String? _error;
 
+  /// 连点几个分类就是几趟并发请求，回来的先后看网络：只认最后发起的那一趟。
+  int _loadGen = 0;
+
   @override
   void initState() {
     super.initState();
@@ -190,6 +198,8 @@ class _SheetCategoriesState extends State<_SheetCategories> {
   void reload() => _load();
 
   Future<void> _load() async {
+    final gen = ++_loadGen;
+    final cat = _category;
     setState(() {
       _loading = true;
       _error = null;
@@ -197,19 +207,19 @@ class _SheetCategoriesState extends State<_SheetCategories> {
     });
     try {
       final lib = BuiltinLibrary.instance;
-      final list = _category == '推荐'
+      final list = cat == '推荐'
           ? await lib.recommendedSheets(limit: 18)
-          : await lib.sheets('wy', _category);
-      if (mounted) setState(() => _sheets = list);
+          : await lib.sheets('wy', cat);
+      if (mounted && gen == _loadGen) setState(() => _sheets = list);
     } catch (e) {
-      if (mounted) {
+      if (mounted && gen == _loadGen) {
         setState(() {
           _error = humanizeError(e);
           _sheets = const [];
         });
       }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && gen == _loadGen) setState(() => _loading = false);
     }
   }
 
@@ -217,6 +227,7 @@ class _SheetCategoriesState extends State<_SheetCategories> {
   /// 换的只是顺序，就没有放这个按钮。
   Future<void> _swap() async {
     if (_swapping || _sheets.isEmpty) return;
+    final gen = _loadGen;
     final lib = BuiltinLibrary.instance;
     final size = _sheets.length;
     setState(() => _swapping = true);
@@ -228,7 +239,8 @@ class _SheetCategoriesState extends State<_SheetCategories> {
         list = await lib.recommendedSheets(limit: size, offset: 0);
         used = 0;
       }
-      if (!mounted) return;
+      // 等的这一会儿她可能已经切了分类：那这批就不是这一类的答案了。
+      if (!mounted || gen != _loadGen) return;
       if (list.isNotEmpty) {
         _offset = used;
         setState(() => _sheets = list);

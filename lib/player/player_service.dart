@@ -978,14 +978,6 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     return lyric.isNotEmpty;
   }
 
-  int lyricIndexAt(Duration pos) {
-    final ms = pos.inMilliseconds;
-    for (var i = lyric.length - 1; i >= 0; i--) {
-      if (lyric[i].timeMs <= ms) return i;
-    }
-    return -1;
-  }
-
   Duration lyricPosition(int i) =>
       (i >= 0 && i < lyric.length) ? Duration(milliseconds: lyric[i].timeMs) : Duration.zero;
 
