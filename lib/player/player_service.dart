@@ -289,6 +289,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// 重试那条路，恢复后接着原处放。剩下的（下载的文件放不出、真的没有免费版）
   /// 等回来也一样，直接把话说清楚。
   void _onPlayerError(PlayerException e) {
+    // 还在加载中（busy）的错误不归这条流管：那一次 `setAudioSource` 自己会抛，
+    // 由 [playAt] 的 catch 处理。两边都接就等于同一次失败报两遍、重试排两队，
+    // 而此刻 `current` 已经指向新歌，旧源残留的位置还会被记到新歌头上。
+    if (busy) return;
     final song = current;
     if (song == null || _ap.processingState == ProcessingState.idle) return;
     final pos = _lastHeard > _ap.position ? _lastHeard : _ap.position;
@@ -397,6 +401,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     if (resume == null) {
       _resumeAt = null;
       _resumeKey = null;
+      // 另起一首就该把重试额度重新发一遍：上一首把四轮全烧光，这一首一次都没试过
+      // 就被判死，跳过去的其实是一首好好的歌。
+      _netRetries = 0;
     }
     _lastHeard = Duration.zero;
     if (resume != null) AppLog.add('播', '「${_t(song)}」要从 ${_mm(resume)} 接着放');
@@ -405,7 +412,11 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       if (gen != _generation) return;
       // 取到链接不等于放得出来：音源脚本卡住或平台层不回应时，没有超时就永远
       // 停在「加载中」，自动跳下一首也永远不会触发。
-      await _ap.setAudioSource(source, initialPosition: resume).timeout(const Duration(seconds: 15));
+      // 续播那一趟要慢得多：Exo 得先把缓冲推到第几分钟才回话，用从零起播那 15 秒
+      // 去卡它，恰好会在最不该失败的地方失败。
+      await _ap
+          .setAudioSource(source, initialPosition: resume)
+          .timeout(Duration(seconds: resume != null ? 45 : 15));
       _resumeAt = null;
       _resumeKey = null;
       AppLog.add('播', '「${_t(song)}」开始播放（第 ${_mm(resume ?? Duration.zero)}，$_how）');
@@ -417,7 +428,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       _failStreak = 0;
       _netRetries = 0;
       failedSong = null;
-      LibraryStore.instance.recordRecent(song);
+      // 续播成功不该再记一笔「开播」：第一次放出去那回已经记过了。重连一轮记一次，
+      // 一首歌能凭空攒出四五次播放，而口味是按次数加权的 —— 听着听着就把还在听的
+      // 这首误判成听厌了。
+      if (resume == null) LibraryStore.instance.recordRecent(song);
       unawaited(_loadLyric(song, gen));
       unawaited(_restoreEq());
       // 手动切歌不该从零跑整条链子：开播这一刻就把后面那两首备好。
@@ -587,6 +601,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
         if (LibraryStore.instance.hasLocalFile(cur)) {
           unawaited(_ap.seek(Duration.zero));
           unawaited(_ap.play());
+          // 这一趟是重新开始听，不是上一趟的尾巴：留着「已经记过听完」这个标记，
+          // 她从第二轮里跳走时那一半的收听位置就再也记不进口味了。
+          _endNoted = null;
         } else {
           // 在线单曲循环要重新取链接：缓存里那条地址放一首歌的时间就过期了，
           // 只 seek 回零的话，循环到第二次多半静音或直接失败。
@@ -726,7 +743,12 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> pause() => _ap.pause();
   Future<void> play() => _ap.play();
-  Future<void> seek(Duration d) => _ap.seek(d);
+  Future<void> seek(Duration d) async {
+    // 拖进度条也是「她听到的位置」：不回写这里，往回拖之后万一断流，重连会把人送
+    // 回拖动之前的那一秒，听起来就像歌自己乱跳了一段。
+    _lastHeard = d;
+    await _ap.seek(d);
+  }
   Future<void> setVolume(double v) => _ap.setVolume(v);
 
   Future<void> setSpeed(double v) async {
@@ -773,6 +795,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _resumeAt = null;
     _resumeKey = null;
     _lastHeard = Duration.zero;
+    // 这一首已经记过「听完」，但那笔账属于上一段收听。留着它，下次在这首歌上
+    // 听到一半跳走就不再记账了 —— 曲库只会越听越少地漏掉信号。
+    _endNoted = null;
     AudioPrefetch.instance.cancelRunning();
     queue.clear();
     index = -1;

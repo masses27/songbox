@@ -15,22 +15,42 @@ enum LibraryKind { favorites, recent, downloaded }
 /// 一首歌被听出来的样子：最后一次什么时候开播、总共开播几次、完整听完几次、
 /// 最后一次听到第几秒。口味引擎用的就是这四个数 ——「点开就划走」和「听完一整首」
 /// 差着一个量级，可原来的最近播放把这两件事记成了同一种。
+///
+/// 顺手也存歌名里那位歌手和时长：最近播放只留 200 条，她半年前反复听完过的那个人
+/// 早被挤出去了，光靠那四个数就再也说不出「这些计数属于谁」。
 class PlayStat {
   int at;
   int plays;
   int done;
   int heard;
+  String singer;
+  int interval;
 
-  PlayStat({this.at = 0, this.plays = 0, this.done = 0, this.heard = 0});
+  PlayStat(
+      {this.at = 0,
+      this.plays = 0,
+      this.done = 0,
+      this.heard = 0,
+      this.singer = '',
+      this.interval = 0});
 
   factory PlayStat.fromJson(Map<String, dynamic> j) => PlayStat(
         at: (j['at'] as num?)?.toInt() ?? 0,
         plays: (j['plays'] as num?)?.toInt() ?? 0,
         done: (j['done'] as num?)?.toInt() ?? 0,
         heard: (j['heard'] as num?)?.toInt() ?? 0,
+        singer: j['singer'] as String? ?? '',
+        interval: (j['interval'] as num?)?.toInt() ?? 0,
       );
 
-  Map<String, dynamic> toJson() => {'at': at, 'plays': plays, 'done': done, 'heard': heard};
+  Map<String, dynamic> toJson() => {
+        'at': at,
+        'plays': plays,
+        'done': done,
+        'heard': heard,
+        if (singer.isNotEmpty) 'singer': singer,
+        if (interval > 0) 'interval': interval,
+      };
 }
 
 /// Lightweight JSON-file-backed library for favorites / recent plays / downloads.
@@ -181,6 +201,16 @@ class LibraryStore extends ChangeNotifier {
 
   PlayStat? playStat(Song s) => _stats[keyOf(s)];
 
+  /// 取这一首的计数条目，顺手把歌手名和时长填上：0.8.23 之前的老记录里没有这两项，
+  /// 而正在放这首的这一刻是唯一还拿得到它们的时候。
+  PlayStat _statOf(Song s) {
+    final st = _stats.putIfAbsent(keyOf(s), PlayStat.new);
+    if (st.singer.isEmpty && s.singer.isNotEmpty) st.singer = s.singer;
+    final sec = s.interval ?? 0;
+    if (st.interval <= 0 && sec > 0) st.interval = sec;
+    return st;
+  }
+
   /// 她本机听出来的口味。进「今日私荐」时算一次：几百条记录，纯内存加权，
   /// 不用等网络也不必落盘。
   Taste taste() => Taste.from(
@@ -191,13 +221,17 @@ class LibraryStore extends ChangeNotifier {
           for (final e in _stats.entries)
             e.key: (plays: e.value.plays, done: e.value.done, heard: e.value.heard, at: e.value.at),
         },
+        // 计数比最近播放那 200 条活得久得多，被挤出去的那些靠这里把名字带回来。
+        backfill: {
+          for (final e in _stats.entries)
+            if (e.value.singer.isNotEmpty) e.key: (singer: e.value.singer, interval: e.value.interval),
+        },
       );
 
   /// 开播记账：一次「开始放这首」。
   void notePlay(Song s) {
     final now = DateTime.now();
-    final st = _stats.putIfAbsent(keyOf(s), PlayStat.new)
-      ..at = now.millisecondsSinceEpoch;
+    final st = _statOf(s)..at = now.millisecondsSinceEpoch;
     st.plays++;
     final day = _dayKey(now);
     _days[day] = (_days[day] ?? 0) + 1;
@@ -213,7 +247,7 @@ class LibraryStore extends ChangeNotifier {
   /// 听到哪 / 有没有听完。[_stats] 里没这首歌（老数据或记账之前就在放）时补一条，
   /// 不然「听完过」这个最强的信号会被整批丢掉。
   void noteHeard(Song s, {required int heardSeconds, required bool completed}) {
-    final st = _stats.putIfAbsent(keyOf(s), PlayStat.new);
+    final st = _statOf(s);
     // 只往上抬：上次听到 200 秒、这次手滑点开 15 秒就收回，覆盖掉的话她在 180 秒
     // 处听完过这件事就没了，口味只会越算越不准。
     if (heardSeconds > st.heard) st.heard = heardSeconds;

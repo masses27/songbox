@@ -85,7 +85,9 @@ class _LogPageState extends State<LogPage> {
             children: [
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: _copy,
+                  // 刚清过空的时候按下去只会复制一段抬头，她还以为复制成功了 ——
+                  // 没内容就把按钮关掉，比弹一条没用的提示明白得多。
+                  onPressed: _text.isEmpty ? null : _copy,
                   icon: const Icon(Icons.copy_all, size: 18),
                   label: const Text('复制全部发我'),
                   style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
@@ -93,12 +95,14 @@ class _LogPageState extends State<LogPage> {
               ),
               const SizedBox(width: 10),
               TextButton(
-                onPressed: () async {
-                  await AppLog.clear();
-                  if (!mounted) return;
-                  setState(() => _loading = true);
-                  _load();
-                },
+                onPressed: _text.isEmpty
+                    ? null
+                    : () async {
+                        await AppLog.clear();
+                        if (!mounted) return;
+                        setState(() => _loading = true);
+                        _load();
+                      },
                 child: const Text('清空'),
               ),
             ],

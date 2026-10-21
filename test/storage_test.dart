@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lyric_music/library/library_store.dart';
 import 'package:lyric_music/settings/app_settings.dart';
 import 'package:lyric_music/util/app_log.dart';
 import 'package:lyric_music/util/json_file.dart';
@@ -172,6 +173,25 @@ void main() {
       final t = await AppLog.exportText();
       expect(t, startsWith('听歌小窝 v${AppSettings.appVersion} · 音质 ${AppSettings.instance.quality}'));
       expect(t, contains('----'));
+    });
+  });
+
+  group('听歌计数', () {
+    test('歌手名和时长存得回去；空的不落盘，不白占位置', () {
+      final st = PlayStat(at: 1, plays: 2);
+      expect(st.toJson(), {'at': 1, 'plays': 2, 'done': 0, 'heard': 0});
+      final full = PlayStat(at: 1, plays: 2, done: 1, heard: 30, singer: '某人', interval: 200);
+      final back = PlayStat.fromJson(jsonDecode(jsonEncode(full.toJson())));
+      expect(back.singer, '某人', reason: '被挤出最近播放之后，口味只能靠这个名字认人');
+      expect(back.interval, 200);
+      expect(back.heard, 30);
+    });
+
+    test('0.8.23 之前那份只有四个数的记录照样读得回来', () {
+      final old = PlayStat.fromJson({'at': 5, 'plays': 1, 'done': 0, 'heard': 0});
+      expect(old.at, 5);
+      expect(old.singer, '');
+      expect(old.interval, 0);
     });
   });
 }

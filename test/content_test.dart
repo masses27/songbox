@@ -174,6 +174,91 @@ void main() {
       expect(taste.rank([old('a'), old('b')], count: 1, at: now), hasLength(1));
     });
 
+    test('昨天刚听过的歌今天不再端上来，隔了五天的还算新鲜', () {
+      final now = DateTime(2026, 10, 21);
+      Song s(String id) => Song(source: 'wy', songmid: id, name: '歌$id', singer: '某人', interval: 200);
+      final taste = Taste.from(
+        favorites: const [],
+        recent: [s('a'), s('c')],
+        playlistSongs: const [],
+        stats: {
+          'wy:a': (plays: 1, done: 0, heard: 30, at: now.subtract(const Duration(days: 1)).millisecondsSinceEpoch),
+          'wy:c': (plays: 1, done: 0, heard: 30, at: now.subtract(const Duration(days: 5)).millisecondsSinceEpoch),
+        },
+        at: now,
+      );
+      expect(taste.heardRecently.toList(), ['wy:a']);
+      expect(taste.rank([s('a'), s('b')], count: 1, at: now).single.songmid, 'b');
+      expect(taste.rank([s('a'), s('c')], count: 1, at: now).single.songmid, 'c');
+    });
+
+    test('被挤出最近播放的老记录也算进口味，只要计数里还带着名字', () {
+      final now = DateTime(2026, 10, 21);
+      final taste = Taste.from(
+        favorites: const [],
+        recent: const [],
+        playlistSongs: const [],
+        stats: {
+          'wy:z': (
+            plays: 3,
+            done: 2,
+            heard: 200,
+            at: now.subtract(const Duration(days: 30)).millisecondsSinceEpoch
+          ),
+        },
+        backfill: {'wy:z': (singer: '某人', interval: 200)},
+        at: now,
+      );
+      expect(taste.artists['某人'], greaterThan(0));
+      expect(taste.topArtists(), ['某人']);
+      // 时长也是靠这一份补回来的：整首听完过两遍，早该算听厌了。
+      expect(taste.wornOut, contains('wy:z'));
+    });
+
+    test('一位歌手最多占三首：偏一位不该让半屏都是同一个人', () {
+      final now = DateTime(2026, 10, 21);
+      final taste = Taste.from(
+        favorites: [Song(source: 'wy', songmid: 'a', name: '她的歌', singer: '某人')],
+        recent: const [],
+        playlistSongs: const [],
+        stats: const {},
+        at: now,
+      );
+      final ranked = taste.rank([
+        for (var i = 0; i < 6; i++) Song(source: 'wy', songmid: 'p$i', name: '某人新歌$i', singer: '某人'),
+        for (var i = 0; i < 6; i++) Song(source: 'wy', songmid: 'q$i', name: '路人歌$i', singer: '路人'),
+      ], count: 6, at: now);
+      expect(ranked.where((e) => e.singer == '某人'), hasLength(3));
+      expect(ranked.where((e) => e.singer == '路人'), hasLength(3));
+    });
+
+    test('池子里只有那一位歌手时也填满，上限不该饿死一屏', () {
+      final now = DateTime(2026, 10, 21);
+      final taste = Taste.from(
+        favorites: [Song(source: 'wy', songmid: 'a', name: '她的歌', singer: '某人')],
+        recent: const [],
+        playlistSongs: const [],
+        stats: const {},
+        at: now,
+      );
+      final ranked = taste.rank([
+        for (var i = 0; i < 6; i++) Song(source: 'wy', songmid: 'p$i', name: '某人新歌$i', singer: '某人'),
+      ], count: 5, at: now);
+      expect(ranked, hasLength(5));
+    });
+
+    test('两份名单里的同一首只占一个位置', () {
+      final now = DateTime(2026, 10, 21);
+      final dup = Song(source: 'wy', songmid: 'a', name: '同一首');
+      final ranked = Taste.empty.rank([
+        dup,
+        dup,
+        for (var i = 0; i < 12; i++) Song(source: 'wy', songmid: 'b$i', name: '歌$i'),
+      ], count: 12, at: now);
+      expect(ranked, hasLength(12));
+      expect(ranked.map((e) => e.songmid).toSet(), hasLength(12), reason: '新歌位和榜单是两份名单，同一首常两边都在');
+    });
+
     test('会员墙后面的歌扣分：这台手机上它多半要绕一整条换源链子', () {
       final now = DateTime(2026, 10, 21);
       final taste = Taste.from(

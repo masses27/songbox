@@ -68,8 +68,15 @@ class AppLog {
   static Future<String> tail({int lines = 400}) async {
     final d = _dir;
     if (d == null) return _pending.join('\n');
-    final files = d.listSync().whereType<File>().where(_isLog).toList()
-      ..sort((a, b) => a.path.compareTo(b.path));
+    final List<File> files;
+    try {
+      files = d.listSync().whereType<File>().where(_isLog).toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
+    } catch (_) {
+      // 目录被人从外部清掉、存储临时不可用都到这里来：这一页该显示「还没有内容」，
+      // 而不是转一辈子圈。
+      return '';
+    }
     final out = <String>[];
     for (final f in files.reversed) {
       try {
@@ -95,14 +102,20 @@ class AppLog {
 
   static Future<void> clear() async {
     final d = _dir;
-    if (d == null) return;
-    for (final f in d.listSync().whereType<File>().where(_isLog)) {
-      try {
-        f.deleteSync();
-      } catch (_) {}
+    if (d == null) {
+      _pending.clear();
+      return;
     }
+    try {
+      for (final f in d.listSync().whereType<File>().where(_isLog)) {
+        try {
+          f.deleteSync();
+        } catch (_) {}
+      }
+    } catch (_) {}
     _pending.clear();
-    write('${_stamp()} [志] 已清空');
+    // 清完不再补一行「已清空」：那一行会让这一页永远不为空，界面上「没内容就关掉」
+    // 的两个按钮等于没关过，而空着本身就是清过的证据。
   }
 
   static String _name(DateTime t) =>
