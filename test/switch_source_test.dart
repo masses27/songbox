@@ -41,6 +41,29 @@ void main() {
     });
   });
 
+  group('点歌手名去搜索时取哪一个名字', () {
+    test('网易云的顿号串只取第一个', () {
+      expect(_s('我本人', '陶喆、张韶涵', source: 'wy').leadArtist, '陶喆');
+    });
+
+    test('QQ 用斜杠、酷我用逗号，也照样只取第一个', () {
+      expect(_s('归途', '陈奕迅/林忆莲', source: 'tx').leadArtist, '陈奕迅');
+      expect(_s('归途', '陈奕迅,林忆莲', source: 'kw').leadArtist, '陈奕迅');
+    });
+
+    test('串里的空位跳过，取后面那个真名字', () {
+      expect(_s('归途', '、林忆莲').leadArtist, '林忆莲');
+    });
+
+    test('独唱就是整串，多余空格收掉', () {
+      expect(_s('晴天', ' 周杰伦 ').leadArtist, '周杰伦');
+    });
+
+    test('歌手名整串是空的就只能给空串', () {
+      expect(_s('晴天', '').leadArtist, '');
+    });
+  });
+
   group('会员墙标记', () {
     test('只有网易云的 fee=1 算挡在会员后面', () {
       expect(Song(source: 'wy', songmid: 'a', name: 'x', fee: 1).needsVip, isTrue);

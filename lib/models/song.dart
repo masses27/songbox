@@ -46,6 +46,18 @@ class Song {
   /// 这首在网易云端内放不出来（会员/付费墙）。
   bool get needsVip => fee == 1 && source == 'wy';
 
+  /// 合唱串里的第一个名字。点歌手名去搜索时塞整串（「陶喆、张韶涵」）只会什么都
+  /// 搜不到，而各家的连接符还不一样：网易云用「、」，QQ 用「/」，酷我用「,」。
+  String get leadArtist {
+    for (final part in singer.split(_artistSplit)) {
+      final name = part.trim();
+      if (name.isNotEmpty) return name;
+    }
+    return singer.trim();
+  }
+
+  static final RegExp _artistSplit = RegExp(r'[、,/／]');
+
   /// 换源时这条候选本身就被付费墙挡着。网易云 fee=1 要会员，腾讯 payplay=1 同样要
   /// 会员（实测匿名取链回 result:104003）；酷狗用搜索里的 `Privilege>=10` 判（见
   /// KgNative.search，匿名直链对这种歌一律回 `status:2`）。酷我的付费标记不可靠，

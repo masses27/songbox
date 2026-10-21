@@ -95,6 +95,12 @@ class BuiltinLibrary {
   Future<({int total, List<SheetInfo> list})> searchSheets(String keyword, {int page = 1}) =>
       WySearch().searchSheets(keyword, page: page);
 
+  /// 「含这首歌的歌单」：按歌名搜一批候选再逐张核对曲目表，怎么核、核几张都归
+  /// WySearch 说，这里只给界面留一个入口。
+  Future<({List<SheetInfo> list, bool verified, int checked})> sheetsHolding(
+          String keyword, String songId) =>
+      WySearch().sheetsHolding(keyword, songId);
+
   Future<({ArtistInfo artist, List<Song> songs})> artist(String id) =>
       _catalog.run('artist-$id', () => WyCatalog.artist(id));
 

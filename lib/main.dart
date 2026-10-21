@@ -12,6 +12,7 @@ import 'settings/app_settings.dart';
 import 'source/source_manager.dart';
 import 'util/app_log.dart';
 import 'util/humanize.dart';
+import 'util/power_status.dart';
 import 'ui/pages/discover_page.dart';
 import 'ui/pages/home_page.dart';
 import 'ui/pages/library_page.dart';
@@ -153,6 +154,7 @@ class _MainShellState extends State<MainShell> {
   int _tab = 0;
   int _seenErrorTick = 0;
   int _seenNoticeTick = 0;
+  int _seenCardTick = 0;
   /// 后台自检那一班：开屏 8 秒后跑第一次，之后每半天一次，由 [_runStartupChecks] 自己续排。
   Timer? _startupTimer;
   static const _checksInterval = Duration(hours: 12);
@@ -206,6 +208,30 @@ class _MainShellState extends State<MainShell> {
       _seenNoticeTick = player.noticeTick;
       if (!mounted) return;
       toast(context, player.notice ?? '');
+    }
+    // 下拉菜单里那张播放卡没到系统里 —— 三种病因去处不同，动作直接放在提示条上，
+    // 不让她自己去设置页里找。
+    if (player.cardTick != _seenCardTick) {
+      _seenCardTick = player.cardTick;
+      if (!mounted) return;
+      final problem = player.cardProblem;
+      final (String msg, String label) = switch (problem) {
+        MediaCardVerdict.notificationsOff => ('系统把听歌小窝的通知关了，下拉菜单里看不到播放卡', '去开启'),
+        MediaCardVerdict.channelBlocked => ('「播放控制」那一栏的通知被关掉了，播放卡出不来', '去开启'),
+        _ => ('歌在放，但播放卡没送到系统里，点一下重发', '重发一次'),
+      };
+      toast(context, msg, actionLabel: label, onAction: () => _fixCard(problem));
+    }
+  }
+
+  Future<void> _fixCard(MediaCardVerdict problem) async {
+    switch (problem) {
+      case MediaCardVerdict.notificationsOff:
+        await PowerStatus.openNotificationSettings();
+      case MediaCardVerdict.channelBlocked:
+        await PowerStatus.openChannelSettings();
+      default:
+        await PlayerService.instance.repostCard();
     }
   }
 

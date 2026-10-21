@@ -128,17 +128,63 @@ class WySearch {
   Future<({int total, List<SheetInfo> list})> searchSheets(String keyword,
       {int page = 1, int limit = 30}) async {
     final result = await _search(keyword, 1000, page, limit);
+    final list = _sheets(result);
+    return (
+      total: (result?['playlistCount'] as num?)?.toInt() ?? list.length,
+      list: list
+    );
+  }
+
+  static List<SheetInfo> _sheets(Map? result) {
     final arr = (result?['playlists'] as List?) ?? const [];
-    final list = arr.whereType<Map>().map((e) {
+    return arr.whereType<Map>().map((e) {
       final img = e['coverImgUrl']?.toString();
       return SheetInfo('wy', '${e['id']}', '${e['name'] ?? ''}',
           (img == null || img.isEmpty) ? null : img, '${e['description'] ?? ''}'.trim(),
           playCount: num.tryParse('${e['playCount'] ?? 0}')?.toInt() ?? 0);
     }).where((s) => s.id.isNotEmpty && s.name.isNotEmpty).toList();
-    return (
-      total: (result?['playlistCount'] as num?)?.toInt() ?? list.length,
-      list: list
-    );
+  }
+
+  /// 这张歌单的曲目表里到底有没有这首歌。
+  ///
+  /// v3 detail 不管 `n` 写多少都回完整的 id 串，所以 n=1 是最便宜的问法。
+  /// 问不到（断网、歌单被删）一律算「没核上」：宁可少给，不能把没确认的
+  /// 歌单说成收录这首歌。
+  static Future<bool> sheetHasSong(String sheetId, String songId) async {
+    try {
+      final detail = await WyNative.getJson('/api/v3/playlist/detail', query: {'id': sheetId, 'n': '1'});
+      final trackIds = ((detail['playlist'] as Map?)?['trackIds'] as List?) ?? const [];
+      return trackIds.any((e) => '${(e as Map?)?['id']}' == songId);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 含这首歌的歌单：先按歌名搜出一批候选，再逐张拿曲目表核对。
+  ///
+  /// 核对这步不能省 —— 实测 type=1000 的候选里差不多一半名字带着《孤勇者》、
+  /// 曲目表里放的却是别人的翻唱（12915944410 那张连描述都写着孤勇者，47 首里没有）。
+  /// 一张一次请求，所以只核前 8 张、3 张一批地问，核满 5 张就够铺一屏。
+  /// 一张都没核上时退回那批候选，`verified=false` 让界面说清「只是名字里有」。
+  /// `checked` 是这一步实际摊开看了几张 —— 界面得按这个数说话，核满 5 张就停时
+  /// 它比 8 小，写成固定 8 就成了编数字。
+  Future<({List<SheetInfo> list, bool verified, int checked})> sheetsHolding(
+      String keyword, String songId) async {
+    final cands = _sheets(await _search(keyword, 1000, 1, 30)).take(8).toList();
+    if (cands.isEmpty) return (list: cands, verified: false, checked: 0);
+    final hits = <SheetInfo>[];
+    var checked = 0;
+    for (var i = 0; i < cands.length && hits.length < 5; i += 3) {
+      final batch = cands.sublist(i, i + 3 > cands.length ? cands.length : i + 3);
+      final ok = await Future.wait(batch.map((s) => sheetHasSong(s.id, songId)));
+      checked += batch.length;
+      for (var j = 0; j < batch.length; j++) {
+        if (ok[j]) hits.add(batch[j]);
+      }
+    }
+    return hits.isEmpty
+        ? (list: cands, verified: false, checked: checked)
+        : (list: hits, verified: true, checked: checked);
   }
 
   /// 搜索联想 — 网页版搜索框下拉用的同一个接口，端内 weapi 签名就够，不用登录。

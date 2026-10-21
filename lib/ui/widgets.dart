@@ -11,6 +11,7 @@ import '../settings/app_settings.dart';
 import '../util/art_url.dart';
 import '../util/humanize.dart';
 import 'pages/builtin_library.dart';
+import 'pages/search_page.dart';
 import 'theme.dart';
 
 /// Shared NetEase-Cloud-Music-style building blocks.
@@ -588,6 +589,11 @@ Future<void> showSongMenu(BuildContext context, Song song,
             item(Icons.playlist_add, '加入歌单', () => pickPlaylist(context, song)),
             item(Icons.change_circle_outlined, '找其他版本',
                 () => showOtherVersionsSheet(context, song)),
+            item(Icons.person_search, '搜这位歌手',
+                () => SearchPage.open(context, song.leadArtist)),
+            item(Icons.playlist_add_circle_outlined, '搜含这首歌的歌单',
+                () => SearchPage.open(context, song.name,
+                    kind: 3, holdsSong: song.source == 'wy' ? song.songmid : '')),
             if (!store.hasLocalFile(song))
               item(Icons.download, '下载', () => requestDownload(context, song))
             else

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../models/results.dart';
 import '../../models/song.dart';
 import '../../settings/app_settings.dart';
+import '../../util/fuzzy_query.dart';
 import '../../util/humanize.dart';
 import '../player/player_bar.dart';
 import '../theme.dart';
@@ -18,7 +19,27 @@ import 'sheet_detail_page.dart';
 /// 搜索: one keyword, four result kinds (单曲 / 歌手 / 专辑 / 歌单), each with its
 /// own paging — the same shape 网易云 uses.
 class SearchPage extends StatefulWidget {
-  const SearchPage({super.key});
+  const SearchPage({super.key, this.initialQuery, this.initialKind = 0, this.holdsSong});
+
+  /// 从别处一键跳进来时带来的关键词（点歌手名、找含这首歌的歌单）。
+  final String? initialQuery;
+
+  /// 落在哪个 tab：0 单曲、1 歌手、2 专辑、3 歌单。
+  final int initialKind;
+
+  /// 从「搜含这首歌的歌单」跳进来时带上：网易云的歌 id（能逐张核对曲目表）；
+  /// 空串表示别的曲库没有网易云编号、对不了，只能按名字搜；null = 不是这个入口。
+  final String? holdsSong;
+
+  /// 别的页面走这里，别各自抄一遍 Navigator.push。
+  static Future<void> open(BuildContext context, String keyword,
+          {int kind = 0, String? holdsSong}) =>
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) =>
+                SearchPage(initialQuery: keyword, initialKind: kind, holdsSong: holdsSong)),
+      );
 
   @override
   State<SearchPage> createState() => _SearchPageState();
@@ -48,7 +69,7 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
         label: '首',
         load: (kw, page) async {
           final res = await _library.search(kw, source: _source, page: page);
-          return (list: res.list, pages: res.allPage, total: res.total);
+          return (list: res.list, pages: res.allPage, total: res.total, note: null, checked: 0);
         },
       ),
       _Tab<ArtistInfo>(
@@ -56,7 +77,7 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
         label: '位歌手',
         load: (kw, page) async {
           final res = await _library.searchArtists(kw, page: page);
-          return (list: res.list, pages: _pages(res.total), total: res.total);
+          return (list: res.list, pages: _pages(res.total), total: res.total, note: null, checked: 0);
         },
       ),
       _Tab<AlbumInfo>(
@@ -64,24 +85,61 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
         label: '张专辑',
         load: (kw, page) async {
           final res = await _library.searchAlbums(kw, page: page);
-          return (list: res.list, pages: _pages(res.total), total: res.total);
+          return (list: res.list, pages: _pages(res.total), total: res.total, note: null, checked: 0);
         },
       ),
       _Tab<SheetInfo>(
         idOf: (s) => s.id,
         label: '个歌单',
         load: (kw, page) async {
+          final hold = widget.holdsSong;
+          // 只在框里还是跳进来那首歌的名字时才对曲目表：她把词改掉之后，手里
+          // 这个 id 跟搜索词已经没关系了。
+          if (hold != null && page == 1 && kw == normalizeKeyword(widget.initialQuery ?? '')) {
+            // 名字里带着这首歌不算数：逐张核对过曲目表才交出去。核对一张就是
+            // 一次请求，所以只核首批。
+            if (hold.isEmpty) {
+              // 从 QQ、酷我那边点进来的：没有网易云编号，对不了曲目表，
+              // 那就只能按名字搜，但得说清这一栏只是名字像。
+              final res = await _library.searchSheets(kw, page: 1);
+              return (
+                list: res.list,
+                pages: _pages(res.total),
+                total: res.total,
+                checked: 0,
+                note: '这些歌单只是名字里带着这首歌（非网易云的歌对不了曲目表）'
+              );
+            }
+            final res = await _library.sheetsHolding(kw, hold);
+            return (
+              list: res.list,
+              pages: 1,
+              total: res.list.length,
+              checked: res.checked,
+              note: res.verified ? '下面每张都核对过曲目表，里面真有这首歌' : '这些只是名字里带着这首歌，曲目表里没能确认'
+            );
+          }
           final res = await _library.searchSheets(kw, page: page);
-          return (list: res.list, pages: _pages(res.total), total: res.total);
+          return (list: res.list, pages: _pages(res.total), total: res.total, note: null, checked: 0);
         },
       ),
     ];
     for (final tab in _tabs) {
       tab.scroll.addListener(() => _onScroll(tab));
     }
-    _tabCtrl = TabController(vsync: this, length: _kinds.length)..addListener(_onTabChanged);
+    _kind = widget.initialKind.clamp(0, _kinds.length - 1);
+    _tabCtrl = TabController(
+        vsync: this, length: _kinds.length, initialIndex: _kind)
+      ..addListener(_onTabChanged);
+    final kw = widget.initialQuery?.trim() ?? '';
+    // 先塞词、后挂监听：带着关键词跳进来不该再排一次搜索联想，
+    // 那一发回来会把刚要看的结果页换成联想列表。
+    if (kw.isNotEmpty) _ctrl.text = kw;
     _ctrl.addListener(_onTextChanged);
     unawaited(_loadHot());
+    if (kw.isEmpty) return;
+    // 等一帧再查：_search 里要 setState，而 initState 里 setState 是要报错的。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _search());
   }
 
   Future<void> _loadHot() async {
@@ -111,7 +169,8 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
   }
 
   void _onTextChanged() {
-    final kw = _ctrl.text.trim();
+    // 联想也按收拾过的词问：全角那个斜杠在她手里就是分隔符，整串递给接口一样搜不出东西。
+    final kw = normalizeKeyword(_ctrl.text);
     if (kw.isEmpty && mounted && _tabs.any((t) => t.items.isNotEmpty)) {
       setState(_resetAll);
     }
@@ -127,7 +186,7 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
   Future<void> _fetchSuggest(String kw) async {
     try {
       final items = await _library.searchSuggest(kw);
-      if (!mounted || _ctrl.text.trim() != kw) return;
+      if (!mounted || normalizeKeyword(_ctrl.text) != kw) return;
       setState(() {
         _suggest = items;
         _suggestFor = kw;
@@ -160,8 +219,11 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
   /// A fresh keyword clears every tab; switching source does the same because
   /// the other库 has no 歌手/专辑/歌单 results.
   Future<void> _search() async {
-    final kw = _ctrl.text.trim();
+    final kw = normalizeKeyword(_ctrl.text);
     if (kw.isEmpty) return;
+    // 收拾过的词写回框里 —— 她看到的就是发出去搜的那个。这一句会顺手排一次
+    // 联想，所以紧接着的那次 cancel 不能省。
+    if (kw != _ctrl.text) _ctrl.text = kw;
     _suggestTimer?.cancel();
     setState(() {
       _suggest = const [];
@@ -173,7 +235,7 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
 
   Future<void> _run({_Tab? tab, bool loadMore = false}) async {
     final target = tab ?? _current;
-    final kw = _ctrl.text.trim();
+    final kw = normalizeKeyword(_ctrl.text);
     if (kw.isEmpty) return;
     if (loadMore && !target.canLoadMore) return;
     setState(() {
@@ -192,6 +254,13 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
         target.total = res.total;
         target.searched = true;
         target.moreError = null;
+        // 空结果不等于「真没有」：把还能试的写法备好，界面在空态下面递给她点。
+        target.keyword = kw;
+        target.alternatives = target.items.isEmpty ? relaxations(kw) : const [];
+        if (!loadMore) {
+          target.note = res.note;
+          target.checked = res.checked;
+        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -261,7 +330,8 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
                 valueListenable: _ctrl,
                 builder: (context, v, _) => TextField(
                   controller: _ctrl,
-                  autofocus: true,
+                  // 带着词跳进来是来看结果的，不是来打字的：键盘别先弹出来占半屏。
+                  autofocus: widget.initialQuery?.trim().isNotEmpty != true,
                   onSubmitted: (_) => _search(),
                   textInputAction: TextInputAction.search,
                   decoration: InputDecoration(
@@ -335,7 +405,8 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
   }
 
   Widget _body(List<String> history) {
-    final kw = _ctrl.text.trim();
+    // 和 _onTextChanged 用同一个算法，否则联想列表永远对不上当前输入、不显示。
+    final kw = normalizeKeyword(_ctrl.text);
     if (_suggest.isNotEmpty && _suggestFor == kw && kw.isNotEmpty) {
       return _SuggestList(items: _suggest, onPick: _useKeyword);
     }
@@ -371,13 +442,50 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
       );
     }
     if (tab.items.isEmpty) {
-      return ListView(children: const [EmptyState(message: '没搜到结果，换个关键词试试')]);
+      return ListView(
+        children: [
+          EmptyState(
+              message: tab.alternatives.isEmpty
+                  ? '没搜到「${tab.keyword}」，换个关键词再试'
+                  : '没搜到「${tab.keyword}」\n试试下面这些写法'),
+          if (tab.alternatives.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  for (final alt in tab.alternatives)
+                    ActionChip(
+                      label: Text(alt, style: const TextStyle(fontSize: 13)),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _useKeyword(alt),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      );
     }
+    // 核对过的结果要在上面先说一句「每张都查过曲目表」，不然她以为
+    // 这跟普通搜歌单是一回事。
+    final head = tab.note == null ? 0 : 1;
     return ListView.separated(
       controller: tab.scroll,
-      itemCount: tab.items.length + 1,
+      itemCount: tab.items.length + 1 + head,
       separatorBuilder: (_, _) => Divider(height: 1, color: AppTheme.divider),
       itemBuilder: (context, i) {
+        if (head == 1) {
+          if (i == 0) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Text(tab.note!,
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            );
+          }
+          i -= 1;
+        }
         if (i >= tab.items.length) return _footer(tab);
         return tile(context, tab.items[i] as T);
       },
@@ -406,6 +514,15 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
         child: Text('继续下滑加载第 ${tab.page + 1} 页',
+            textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      );
+    }
+    if (tab.checked > 0) {
+      // 核对只摊开看了前几张，写「已全部加载」就成了骗人；张数按实际核过的说，
+      // 核满 5 张就停的时候它比候选那批小。
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+        child: Text('核对了搜到的前 ${tab.checked} 张 · 共 ${tab.items.length} ${tab.label}',
             textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       );
     }
@@ -482,7 +599,8 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
 class _Tab<T> {
   _Tab({required this.load, required this.idOf, required this.label});
 
-  final Future<({List<T> list, int pages, int total})> Function(String keyword, int page) load;
+  final Future<({List<T> list, int pages, int total, String? note, int checked})> Function(
+      String keyword, int page) load;
   final String Function(T item) idOf;
   final String label;
 
@@ -496,6 +614,17 @@ class _Tab<T> {
   bool searched = false;
   String? error;
   String? moreError;
+
+  /// 这一页实际搜出去的那个词，和空结果时还能再试的写法。
+  String keyword = '';
+  List<String> alternatives = const [];
+
+  /// 结果上面那句说明：只有在「核对过每张歌单」这类筛选后面才非空。
+  String? note;
+
+  /// 这一栏背后逐张核对过几张曲目表。0 = 没核对，就是普通分页搜索，底部那句
+  /// 「先查了前 N 张」这时候不能说 —— 非网易云那条入口也带说明文字，但它没核过。
+  int checked = 0;
 
   bool get canLoadMore => searched && page < pages && items.isNotEmpty;
 
@@ -520,6 +649,10 @@ class _Tab<T> {
     loading = false;
     error = null;
     moreError = null;
+    keyword = '';
+    alternatives = const [];
+    note = null;
+    checked = 0;
   }
 }
 

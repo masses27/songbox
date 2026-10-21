@@ -14,6 +14,9 @@ analyzer:
     - build/**
     - android/**
     - ios/**
+    # research/ 是一次性的接口探针（gitignore 里也没进仓库），跟着源码一起报
+    # 警告只会把真正的唯一一条盖掉。
+    - research/**
 
 linter:
   # The lint rules applied to this project can be customized in the

@@ -16,6 +16,7 @@ import '../settings/app_settings.dart';
 import '../util/app_log.dart';
 import '../util/art_url.dart';
 import '../util/humanize.dart';
+import '../util/power_status.dart';
 import 'audio_prefetch.dart';
 
 class LyricLine {
@@ -173,6 +174,13 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   String? notice;
   int noticeTick = 0;
 
+  /// 下拉菜单那张播放卡没到系统里时，这里递一次信：主壳看见新 tick 就把
+  /// 「去开启 / 重发一次」放到她手边的提示条上，而不是让她去设置页里找。
+  int cardTick = 0;
+  MediaCardVerdict cardProblem = MediaCardVerdict.idle;
+
+  Timer? _cardTimer;
+
   Timer? _sleepTimer;
   Timer? _sleepTick;
   DateTime? _sleepEndsAt;
@@ -277,7 +285,11 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _stateSub = _ap.playerStateStream.listen((s) {
       if (s.processingState == ProcessingState.completed) _onTrackEnd();
     });
-    _playingSub = _ap.playingStream.listen((_) => notifyListeners());
+    _playingSub = _ap.playingStream.listen((p) {
+      // 那张卡是进入播放态那一刻才贴上去的，所以每次开始放之后都去原生看一眼。
+      if (p) _scheduleCardCheck();
+      notifyListeners();
+    });
     _positionSub = _ap.positionStream.listen((p) {
       if (_ap.playing) _lastHeard = p;
       if (_updateLyricIndex(p)) notifyListeners();
@@ -787,6 +799,48 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> pause() => _ap.pause();
   Future<void> play() => _ap.play();
+
+  /// 那张播放卡是进入播放态那一刻由播放服务贴到系统里的，Dart 侧看不见结果，
+  /// 只能过一小会儿去问原生。晚三秒是别在建连缓冲那阵子多插一次通道调用。
+  void _scheduleCardCheck() {
+    _cardTimer?.cancel();
+    _cardTimer = Timer(const Duration(seconds: 3), _checkMediaCard);
+  }
+
+  Future<void> _checkMediaCard() async {
+    final st = await PowerStatus.mediaCardState();
+    // 三秒里她可能已经停了：那时候「系统里没有卡」本来就该如此。
+    if (!isPlaying) return;
+    final verdict = st.verdict(playing: true);
+    // 同一种毛病只报一次，修好了就把状态清掉，下次复发还能再报。
+    if (verdict == cardProblem) return;
+    cardProblem = verdict;
+    // 只有真的开始放歌之后才查得到结果，所以这一行记的是状态变化，不是每次播放。
+    AppLog.add('卡', switch (verdict) {
+        MediaCardVerdict.notificationsOff => '系统把听歌小窝的通知关了，播放卡发不出去',
+        MediaCardVerdict.channelBlocked => '「播放控制」那一栏被静默，播放卡发不出去',
+        MediaCardVerdict.notPosted => '在放歌，系统里却没有播放卡',
+        MediaCardVerdict.inSystem => '播放卡已经在系统里（那一格还不显示就是手机的媒体模块没接上）',
+        _ => '问不到播放卡的状态',
+      });
+    // 卡片已经在系统里、那一格还不显示，剩下的是手机自己的媒体模块没接上 ——
+    // 那不是弹个提示能解决的，设置页那一行会解释，这里不吵她。
+    if (verdict == MediaCardVerdict.notificationsOff ||
+        verdict == MediaCardVerdict.channelBlocked ||
+        verdict == MediaCardVerdict.notPosted) {
+      cardTick++;
+    }
+    notifyListeners();
+  }
+
+  /// 暂停再播放逼播放服务重新贴一次卡（audio_service 只在进入播放态那一刻
+  /// startForeground），也是让手机重新认一遍这个会话。
+  Future<void> repostCard() async {
+    if (!_ap.playing) return;
+    await _ap.pause();
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await _ap.play();
+  }
   Future<void> seek(Duration d) async {
     // 拖进度条也是「她听到的位置」：不回写这里，往回拖之后万一断流，重连会把人送
     // 回拖动之前的那一秒，听起来就像歌自己乱跳了一段。
@@ -1094,6 +1148,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _sleepTimer?.cancel();
     _sleepTick?.cancel();
+    _cardTimer?.cancel();
     _netRetry?.cancel();
     unawaited(_stateSub?.cancel());
     unawaited(_playingSub?.cancel());

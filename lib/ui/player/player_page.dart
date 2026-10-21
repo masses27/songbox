@@ -13,7 +13,9 @@ import '../../settings/app_settings.dart';
 import '../../util/art_url.dart';
 import '../../util/cover_tint.dart';
 import '../../util/humanize.dart';
+import '../pages/album_page.dart';
 import '../pages/eq_page.dart';
+import '../pages/search_page.dart';
 import '../pages/settings_page.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -125,8 +127,17 @@ class _PlayerPageState extends State<PlayerPage> with SingleTickerProviderStateM
                         onPressed: () => Navigator.pop(context),
                         icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white70, size: 32)),
                     const Spacer(),
-                    Text(song.albumName?.isNotEmpty == true ? song.albumName! : song.name,
-                        style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                    // 专辑页只认网易云那套 id，换源来的歌手里是别家的编号，点进去只会
+                    // 是个空页 —— 所以只有 wy 的歌这一点才跳。
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: song.source == 'wy' && song.albumId?.isNotEmpty == true
+                          ? () => Navigator.push(context,
+                              MaterialPageRoute(builder: (_) => AlbumPage(albumId: song.albumId!)))
+                          : null,
+                      child: Text(song.albumName?.isNotEmpty == true ? song.albumName! : song.name,
+                          style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                    ),
                     const Spacer(),
                     Consumer<LibraryStore>(
                       builder: (_, store, _) {
@@ -197,10 +208,18 @@ class _PlayerPageState extends State<PlayerPage> with SingleTickerProviderStateM
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text(song.singer,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                        // 名字本身是合唱串（「陶喆、张韶涵」），点下去只搜第一个：
+                        // 塞整串进搜索框多半什么都搜不到。
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: song.leadArtist.isEmpty
+                              ? null
+                              : () => unawaited(SearchPage.open(context, song.leadArtist)),
+                          child: Text(song.singer,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                        ),
                       ),
                       if (player.sleepActive) ...[
                         Text('定时 ${_fmtLeft(player.sleepRemaining)}',
@@ -534,6 +553,12 @@ class _MoreMenu extends StatelessWidget {
             value: 'versions',
             child: Text('找其他版本', style: TextStyle(color: Colors.white70, fontSize: 14))),
         const PopupMenuItem<String>(
+            value: 'artist',
+            child: Text('搜这位歌手', style: TextStyle(color: Colors.white70, fontSize: 14))),
+        const PopupMenuItem<String>(
+            value: 'sheets',
+            child: Text('搜含这首歌的歌单', style: TextStyle(color: Colors.white70, fontSize: 14))),
+        const PopupMenuItem<String>(
             value: 'eq',
             child: Text('均衡器', style: TextStyle(color: Colors.white70, fontSize: 14))),
         const PopupMenuItem<String>(
@@ -552,6 +577,13 @@ class _MoreMenu extends StatelessWidget {
           if (song != null) {
             unawaited(showOtherVersionsSheet(context, song));
           }
+        } else if (v == 'artist' || v == 'sheets') {
+          final song = player.current;
+          if (song == null) return;
+          unawaited(v == 'artist'
+              ? SearchPage.open(context, song.leadArtist)
+              : SearchPage.open(context, song.name,
+                  kind: 3, holdsSong: song.source == 'wy' ? song.songmid : ''));
         } else if (v == 'eq') {
           unawaited(Navigator.push(context, MaterialPageRoute(builder: (_) => const EqPage())));
         } else if (v == 'settings') {

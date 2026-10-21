@@ -44,8 +44,9 @@ class MainActivity : AudioServiceActivity() {
                     "powerSaveMode" -> result.success(inPowerSave())
                     "askIgnoreBatteryOptimization" -> result.success(askIgnoring())
                     "openBatterySettings" -> result.success(openBatterySettings())
-                    "notificationsEnabled" -> result.success(notificationsEnabled())
+                    "mediaCardState" -> result.success(mediaCardState())
                     "openNotificationSettings" -> result.success(openNotificationSettings())
+                    "openChannelSettings" -> result.success(openChannelSettings())
                     else -> result.notImplemented()
                 }
             }
@@ -111,6 +112,27 @@ class MainActivity : AudioServiceActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) true
         else getSystemService(NotificationManager::class.java).areNotificationsEnabled()
 
+    /**
+     * 那张播放卡到底有没有贴到系统里，三项分开问。
+     *
+     * getActiveNotifications 只回本应用自己发的通知，所以这一眼既不用新权限，
+     * 也看不见别人的卡。「正在播放但这里查不到」就是卡片根本没贴上去，和「贴上了、
+     * 控制中心那一格没显示」是两种病，后者是手机自己的媒体模块没接上。
+     */
+    private fun mediaCardState(): Map<String, Any?> {
+        val nm = getSystemService(NotificationManager::class.java)
+        val out = mutableMapOf<String, Any?>()
+        out["notifications"] = notificationsEnabled()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // 通道被静默（importance=0）时通知不会再显示，而总开关仍是开着的。
+            out["channel"] = nm.getNotificationChannel(PLAYBACK_CHANNEL)?.importance
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            out["posted"] = nm.activeNotifications.any { it.notification.channelId == PLAYBACK_CHANNEL }
+        }
+        return out
+    }
+
     private fun openNotificationSettings(): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
@@ -133,7 +155,30 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /** 通道被静默时要把她直接带到那一栏，整罐通知设置里自己翻太考人。 */
+    private fun openChannelSettings(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                // 这一跳的 extra 名在 SDK 里没有公开常量，只能照系统源码写死。
+                // 注意键名是 Settings.EXTRA_CHANNEL_ID 的值「android.provider.extra.CHANNEL_ID」，
+                // 不是 APP_CHANNEL_ID —— 写错了页面照样打开，只是落不到那一栏上，没人会发现。
+                startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                        .putExtra("android.provider.extra.CHANNEL_ID", PLAYBACK_CHANNEL)
+                )
+                return true
+            } catch (e: Exception) {
+                // 这个 ROM 不认直达通道这一跳，退到应用通知页。
+            }
+        }
+        return openNotificationSettings()
+    }
+
     companion object {
         private const val CHANNEL = "com.wyj.music.lyric_music/power"
+
+        /** 与 lib/main.dart 里 JustAudioBackground.init 的通道 id 是同一个字符串。 */
+        private const val PLAYBACK_CHANNEL = "com.wyj.music.lyric_music.playback"
     }
 }

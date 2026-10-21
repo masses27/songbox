@@ -25,12 +25,23 @@ class PowerStatus {
 
   static Future<bool> openBatterySettings() async => supported && await _ask('openBatterySettings') == true;
 
-  /// 通知栏那张控制卡本质是一条媒体通知，系统总开关关了它就出不来。
-  static Future<bool> notificationsEnabled() async =>
-      !supported || await _ask('notificationsEnabled') == true;
+  /// 下拉菜单里那张播放卡现在到底处在哪一步（三份证据见 [MediaCardState]）。
+  static Future<MediaCardState> mediaCardState() async {
+    if (!supported) return const MediaCardState();
+    final raw = await _ask('mediaCardState');
+    if (raw is! Map) return const MediaCardState();
+    return MediaCardState(
+      notificationsOn: raw['notifications'],
+      channelImportance: raw['channel'],
+      posted: raw['posted'],
+    );
+  }
 
   static Future<bool> openNotificationSettings() async =>
       supported && await _ask('openNotificationSettings') == true;
+
+  /// 「播放控制」这一栏被单独静默时，直达那一栏，别让她在整罐通知设置里翻。
+  static Future<bool> openChannelSettings() async => supported && await _ask('openChannelSettings') == true;
 
   static Future<Object?> _ask(String method) async {
     try {
@@ -39,4 +50,49 @@ class PowerStatus {
       return null;
     }
   }
+}
+
+/// 控制中心/锁屏那张播放卡的三份证据，都只查我们自己发的通知，所以不要新权限。
+class MediaCardState {
+  const MediaCardState({this.notificationsOn, this.channelImportance, this.posted});
+
+  /// 系统让不让这个 App 发通知；null = 原生没答上。
+  final bool? notificationsOn;
+
+  /// 「播放控制」通道的响动等级（安卓的 IMPORTANCE_*，0 = 被单独关掉）；
+  /// null = 系统太老，或从安装到现在还没放过歌。
+  final int? channelImportance;
+
+  /// 此刻系统里有没有我们发出去的那张卡；null = 安卓 9 以下查不到。
+  final bool? posted;
+
+  MediaCardVerdict verdict({required bool playing}) {
+    if (notificationsOn == false) return MediaCardVerdict.notificationsOff;
+    if (channelImportance == 0) return MediaCardVerdict.channelBlocked;
+    if (!playing) return MediaCardVerdict.idle;
+    if (posted == false) return MediaCardVerdict.notPosted;
+    // 总开关和通道都说不上话时，「查不到卡」不能当成病来报。
+    if (posted == null && notificationsOn == null) return MediaCardVerdict.unknown;
+    return MediaCardVerdict.inSystem;
+  }
+}
+
+enum MediaCardVerdict {
+  /// 通知总开关被关着。
+  notificationsOff,
+
+  /// 整罐开着，单是「播放控制」这一栏被静默了。
+  channelBlocked,
+
+  /// 歌在放，卡片却没贴到系统里 —— 重发一次能救。
+  notPosted,
+
+  /// 卡片已经在系统里了；控制中心那一格还不显示就是 ROM 的媒体模块没接上。
+  inSystem,
+
+  /// 没在放歌，这一格问不出什么。
+  idle,
+
+  /// 原生没答上（系统太老或通道调用失败）。
+  unknown,
 }

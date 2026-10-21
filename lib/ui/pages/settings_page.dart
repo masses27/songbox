@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -308,8 +310,9 @@ class _BackgroundRowState extends State<_BackgroundRow> with WidgetsBindingObser
   }
 }
 
-/// 通知栏那张控制卡就是一条媒体通知：系统把通知总开关关掉时它整个不出现，
-/// 而她不会知道是这里被关了。状态直接摊开，点一下带到通知设置页。
+/// 通知栏那张控制卡就是一条媒体通知，控制中心里「在放什么」那一格读的是同一样东西：
+/// 通知被系统关掉、被单独静默、或者压根没贴上去，那一格就只剩「暂无播放」，
+/// 而她在手机上看不出是哪一种。这里把三份证据摊成一句人话，右边就是能点的动作。
 class _NotificationRow extends StatefulWidget {
   const _NotificationRow();
 
@@ -318,17 +321,25 @@ class _NotificationRow extends StatefulWidget {
 }
 
 class _NotificationRowState extends State<_NotificationRow> with WidgetsBindingObserver {
-  bool? _enabled;
+  MediaCardState _state = const MediaCardState();
+  bool _playing = false;
+  bool _busy = false;
+  StreamSubscription<bool>? _playingSub;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _load();
+    // 卡片是开始放的那一刻才贴上去的，所以只在「开始放」之后重查一次。
+    _playingSub = PlayerService.instance.playingStream.listen((p) {
+      if (p) _load();
+    });
   }
 
   @override
   void dispose() {
+    _playingSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -339,32 +350,70 @@ class _NotificationRowState extends State<_NotificationRow> with WidgetsBindingO
   }
 
   Future<void> _load() async {
-    final enabled = await PowerStatus.notificationsEnabled();
+    final st = await PowerStatus.mediaCardState();
     if (!mounted) return;
-    setState(() => _enabled = enabled);
+    setState(() {
+      _state = st;
+      _playing = PlayerService.instance.isPlaying;
+    });
+  }
+
+  /// 暂停再播放会逼播放服务把这张卡重新贴一遍，也是让手机重新认一次这个会话。
+  Future<void> _repost() async {
+    if (_busy || !PlayerService.instance.isPlaying) return;
+    setState(() => _busy = true);
+    await PlayerService.instance.repostCard();
+    // 卡片是状态变化之后才贴上去的，立刻查只会查到旧局面。
+    await Future<void>.delayed(const Duration(milliseconds: 2500));
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _load();
   }
 
   @override
   Widget build(BuildContext context) {
-    final enabled = _enabled;
+    final verdict = _state.verdict(playing: _playing);
+    final (copy, action) = switch (verdict) {
+      MediaCardVerdict.notificationsOff => (
+          '系统把听歌小窝的通知关着，下拉看不到播放卡，控制中心那一格也是空的',
+          '去开启',
+        ),
+      MediaCardVerdict.channelBlocked => (
+          '整罐通知是开的，单是「播放控制」这一栏被关掉了',
+          '去开启',
+        ),
+      MediaCardVerdict.notPosted => ('歌在放，但播放卡没贴到系统里，重发一次一般就好', '重发一次'),
+      MediaCardVerdict.inSystem => (
+          '播放卡已经在系统里，下拉通知栏能直接暂停切歌。'
+          '那一格还是空的就重发一次；再不行是手机的媒体模块没接上，不影响听歌',
+          '重发一次',
+        ),
+      MediaCardVerdict.idle => ('放一首歌再看这一行，就能确认系统那边收到没有', null),
+      MediaCardVerdict.unknown => ('正在确认系统里的播放卡…', null),
+    };
+    final toSettings =
+        verdict == MediaCardVerdict.notificationsOff || verdict == MediaCardVerdict.channelBlocked;
+    Future<void> act() => toSettings ? _openSettings(verdict) : _repost();
     return ListTile(
-      title: const Text('通知栏控制卡'),
-      subtitle: Text(
-        enabled == null
-            ? '正在确认通知权限…'
-            : enabled
-                ? '下拉通知栏（锁屏也一样）能看到封面、歌名，直接暂停继续和拖进度；'
-                    '切歌还是在应用里点'
-                : '通知被系统关着，下拉看不到播放控制卡',
-        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-      ),
-      trailing: enabled == null
+      title: const Text('下拉菜单里的播放卡'),
+      subtitle: Text(copy, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
+      trailing: action == null
           ? null
-          : enabled
-              ? Icon(Icons.notifications_active_outlined, color: AppTheme.primary)
-              : TextButton(onPressed: PowerStatus.openNotificationSettings, child: const Text('去开启')),
-      onTap: enabled == true || enabled == null ? null : () => PowerStatus.openNotificationSettings(),
+          : _busy
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : TextButton(onPressed: act, child: Text(action)),
+      onTap: action == null || _busy ? null : act,
     );
+  }
+
+  /// 两种「通知被关着」要去的不是同一页：整罐开关在应用通知页，
+  /// 单被静默的那一栏只有通道页能改。
+  Future<void> _openSettings(MediaCardVerdict verdict) async {
+    if (verdict == MediaCardVerdict.channelBlocked) {
+      await PowerStatus.openChannelSettings();
+    } else {
+      await PowerStatus.openNotificationSettings();
+    }
   }
 }
 
