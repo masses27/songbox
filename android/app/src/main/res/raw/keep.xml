@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- audio_service 是在运行时按名字查这七个图标的（AudioService.getResourceId →
+     getIdentifier），字节码里一次 R.drawable 引用都没有，release 那趟收缩就把它们当
+     没用的删干净了。删掉之后图标 id 变成 0，PlaybackStateCompat 的 CustomAction 当场
+     抛「You must specify an icon resource id」，而抛的位置在推播放状态那一步里面 ——
+     前台服务没起来、通知通道没建，下拉菜单里的播放卡永远不出现。debug 不收缩，所以
+     只在装到手机上的版本里坏，一坏就是所有版本。 -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/audio_service_play_arrow,@drawable/audio_service_pause,@drawable/audio_service_stop,@drawable/audio_service_skip_next,@drawable/audio_service_skip_previous,@drawable/audio_service_fast_forward,@drawable/audio_service_fast_rewind" />

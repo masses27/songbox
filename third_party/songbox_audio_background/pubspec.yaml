@@ -1,0 +1,23 @@
+# 听歌小窝内置副本：源码来自 pub.dev 的 just_audio_background 0.0.1-beta.17（MIT，见 LICENSE），
+# 只有 lib/just_audio_background.dart 里播放卡「上一首/下一首」那几处被改过（文件顶部有说明）。
+# 改了源码就不再顶上游的名字发布，日后升级上游版本时要把那几处重新对齐。
+name: songbox_audio_background
+description: Modified copy of just_audio_background (MIT, Ryan Heise) that lets the app own the media card's skip buttons.
+version: 0.0.1-beta.17-songbox.1
+homepage: https://github.com/ryanheise/just_audio/tree/master/just_audio_background
+
+dependencies:
+  just_audio_platform_interface: ^4.5.0
+  audio_service: ^0.18.18
+  audio_session: ">=0.1.24 <0.3.0"
+  flutter:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+  meta: ^1.3.0
+  rxdart: '>=0.26.0 <0.29.0'
+  synchronized: ^3.3.0+3
+
+environment:
+  sdk: ^3.6.0
+  flutter: ">=3.27.0"

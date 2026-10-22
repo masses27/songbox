@@ -41,7 +41,7 @@ class AppLog {
     }
   }
 
-  /// 记一步。`tag` 是给人扫一眼用的短词（播、链、换、补、试、跳、荐、源、起）。
+  /// 记一步。`tag` 是给人扫一眼用的短词（播、链、换、补、试、跳、荐、源、起、卡）。
   static void add(String tag, String message) => write('${_stamp()} [$tag] $message');
 
   static void write(String line) {

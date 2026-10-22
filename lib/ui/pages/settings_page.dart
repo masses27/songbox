@@ -312,7 +312,7 @@ class _BackgroundRowState extends State<_BackgroundRow> with WidgetsBindingObser
 
 /// 通知栏那张控制卡就是一条媒体通知，控制中心里「在放什么」那一格读的是同一样东西：
 /// 通知被系统关掉、被单独静默、或者压根没贴上去，那一格就只剩「暂无播放」，
-/// 而她在手机上看不出是哪一种。这里把三份证据摊成一句人话，右边就是能点的动作。
+/// 而她在手机上看不出是哪一种。这里把系统给的证据摊成一句人话加一行取证，右边就是能点的动作。
 class _NotificationRow extends StatefulWidget {
   const _NotificationRow();
 
@@ -350,7 +350,8 @@ class _NotificationRowState extends State<_NotificationRow> with WidgetsBindingO
   }
 
   Future<void> _load() async {
-    final st = await PowerStatus.mediaCardState();
+    // 走播放层：它除了原生那半截，还知道桥里最后一次说了什么、桥报过几次错。
+    final st = await PlayerService.instance.cardEvidence();
     if (!mounted) return;
     setState(() {
       _state = st;
@@ -370,10 +371,23 @@ class _NotificationRowState extends State<_NotificationRow> with WidgetsBindingO
     _load();
   }
 
+  /// 手动逼一次接桥。自动那一趟只在原生不肯交出那个对象时才轮得到她动手。
+  Future<void> _heal() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    await PlayerService.instance.healBridge();
+    await Future<void>.delayed(const Duration(milliseconds: 2500));
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final verdict = _state.verdict(playing: _playing);
-    final (copy, action) = switch (verdict) {
+    // 卡显示得好好的、按钮却按不动，是这第三种病：原生那半截桥被上一次 idle 拆了。
+    final bridgeDead = _state.listenerAlive == false;
+    final (copy0, action) = switch (verdict) {
       MediaCardVerdict.notificationsOff => (
           '系统把听歌小窝的通知关着，下拉看不到播放卡，控制中心那一格也是空的',
           '去开启',
@@ -382,21 +396,82 @@ class _NotificationRowState extends State<_NotificationRow> with WidgetsBindingO
           '整罐通知是开的，单是「播放控制」这一栏被关掉了',
           '去开启',
         ),
+      MediaCardVerdict.notificationsPaused => (
+          '手机开着「暂停通知」，这段时间所有通知都不上屏，播放卡被一起按住',
+          '去关掉',
+        ),
       MediaCardVerdict.notPosted => ('歌在放，但播放卡没贴到系统里，重发一次一般就好', '重发一次'),
-      MediaCardVerdict.inSystem => (
-          '播放卡已经在系统里，下拉通知栏能直接暂停切歌。'
-          '那一格还是空的就重发一次；再不行是手机的媒体模块没接上，不影响听歌',
+      MediaCardVerdict.postedElsewhere => (
+          '播放卡在系统里，只是挂在另一栏上；重发一次能把它挪回「播放控制」',
           '重发一次',
         ),
+      MediaCardVerdict.hiddenByRom => (
+          '卡片已经发出去了，是手机不让它上屏。重发没用，去通知设置里放行',
+          '去开启',
+        ),
+      MediaCardVerdict.inSystem => bridgeDead
+          ? (
+              '卡上的按钮按了没反应：上一次放到一半断了线，应用会自己接回来；'
+                  '接不回来时点这一下逼它一次',
+              '接回来',
+            )
+          : (
+              // 0.8.31 起卡上那两个箭头接的是应用自己的切歌，不再是「画出来给人看」，
+              // 这一行也就只管告诉她卡在了系统里、以及那一格还空时该怎么办。
+              '播放卡已经在系统里：暂停、上一首、下一首在卡上都管用，切歌走的就是应用里'
+                  '那同一套（逐首取链、放不出自动降音质换平台）。'
+                  '那一格还是空的就重发一次；再不行是手机的媒体模块没接上，不影响听歌',
+              '重发一次',
+            ),
       MediaCardVerdict.idle => ('放一首歌再看这一行，就能确认系统那边收到没有', null),
       MediaCardVerdict.unknown => ('正在确认系统里的播放卡…', null),
     };
-    final toSettings =
-        verdict == MediaCardVerdict.notificationsOff || verdict == MediaCardVerdict.channelBlocked;
-    Future<void> act() => toSettings ? _openSettings(verdict) : _repost();
+    // 通道一个都没有 = 服务这一趟压根没走到发通知那一步，和「贴上去了又被一键清理抹掉」
+    // 不是同一种病：那一种重贴正好，这一种得先看服务为什么没走到。而「服务起过却没挂上
+    // 通知」和「话压根没递到服务那边」又是两处不同的断点，取证那一行分得开。
+    final noChannel = verdict == MediaCardVerdict.notPosted && _state.channelImportance == null;
+    final why = switch (_state.serviceStarted) {
+      true => '播放服务起来了，却没把这张卡挂上系统',
+      false => '歌在放，但话没递到播放服务那一边',
+      null => '歌在放，但播放服务这一趟还没走到发通知那一步',
+    };
+    // 桥断着的时候，暂停再播放走的还是同一座桥，所以那种局面不承诺「点一下就好」，
+    // 只把原文指给她看 —— 异常名字里就写着断在哪一跳。
+    final err = _state.bridgeErrors > 0
+        ? '，和播放服务说话错了 ${_state.bridgeErrors} 次（原文在下面那行末尾）'
+        : '';
+    final copy = noChannel
+        ? (_state.bridgeErrors > 0 ? '$why$err' : '$why，点一下逼它重走一遍')
+        : copy0;
+    // 出毛病时把系统答的原始证据一并摊开：她截一张图，我这边就能定案，
+    // 不用再猜一轮、再打一个包让她重装。
+    final showDetail = bridgeDead ||
+        (verdict != MediaCardVerdict.inSystem &&
+            verdict != MediaCardVerdict.idle &&
+            verdict != MediaCardVerdict.unknown);
+    // 「重发一次」只对卡片没贴上去有效；被系统按住的那几种，发一万次也一样。
+    final repost =
+        verdict == MediaCardVerdict.notPosted || verdict == MediaCardVerdict.postedElsewhere;
+    // 按钮上的字和它真正做的事得是同一样。卡没贴上去时先重发 —— 桥真断着，
+    // 重发完那次复查（_checkMediaCard）自己会接，不用她再按第二下。
+    Future<void> act() =>
+        repost ? _repost() : (bridgeDead ? _heal() : _openSettings(verdict));
     return ListTile(
       title: const Text('下拉菜单里的播放卡'),
-      subtitle: Text(copy, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(copy, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
+          if (showDetail)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                _state.detail,
+                style: TextStyle(fontSize: 11, height: 1.4, color: AppTheme.textSecondary.withAlpha(150)),
+              ),
+            ),
+        ],
+      ),
       trailing: action == null
           ? null
           : _busy
@@ -406,7 +481,7 @@ class _NotificationRowState extends State<_NotificationRow> with WidgetsBindingO
     );
   }
 
-  /// 两种「通知被关着」要去的不是同一页：整罐开关在应用通知页，
+  /// 关着的那几种要去的不是同一页：整罐开关在应用通知页，
   /// 单被静默的那一栏只有通道页能改。
   Future<void> _openSettings(MediaCardVerdict verdict) async {
     if (verdict == MediaCardVerdict.channelBlocked) {

@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.8.27+40
+version: 0.8.31+44
 
 environment:
   sdk: ^3.13.5
@@ -40,7 +40,15 @@ dependencies:
   pointycastle: ^4.0.0
   crypto: ^3.0.7
   asn1lib: ^1.6.5
-  just_audio_background: ^0.0.1-beta.17
+  # 播放卡上「上一首/下一首」要有落点：上游那两个键接在它自己的 skipToQueueItem 上，
+  # 而我们一首一首装 AudioSource（放不出时才能逐首降音质、换源、换平台），队列里只有
+  # 一项，按键必然静默。副本在 third_party/，只改了那三处，依赖和打进 APK 的东西不变。
+  songbox_audio_background:
+    path: third_party/songbox_audio_background
+  # 桥（播放服务那一边）出错时不响也不崩，只把异常吞进它自己的流里。要接住它就得
+  # 直接 import audio_service —— 这个包本来就在依赖树里、也早就打进 APK，这里只是
+  # 把它从「间接依赖」写成「直接依赖」，装的东西一个字节都没多。
+  audio_service: ^0.18.19
 
 dev_dependencies:
   flutter_test:

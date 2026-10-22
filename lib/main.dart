@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:just_audio_background/just_audio_background.dart';
+import 'package:songbox_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
 
 import 'download/download_manager.dart';
@@ -117,6 +117,9 @@ class _LyricAppState extends State<LyricApp> with WidgetsBindingObserver {
       LibraryStore.instance.flushNow();
       SourceManager.instance.flushNow();
     }
+    // 从下拉菜单/最近任务回到应用时补看一次播放卡：被系统抹掉的那一种不会自己回来，
+    // 这里发现就顺手重贴，不用她去设置页找按钮。
+    if (state == AppLifecycleState.resumed) PlayerService.instance.recheckMediaCard();
   }
 
   /// 选「跟随系统」时，系统深浅色翻了要重算一次色板。
@@ -209,7 +212,7 @@ class _MainShellState extends State<MainShell> {
       if (!mounted) return;
       toast(context, player.notice ?? '');
     }
-    // 下拉菜单里那张播放卡没到系统里 —— 三种病因去处不同，动作直接放在提示条上，
+    // 下拉菜单里那张播放卡没到系统里 —— 病因不同，去处也不同，动作直接放在提示条上，
     // 不让她自己去设置页里找。
     if (player.cardTick != _seenCardTick) {
       _seenCardTick = player.cardTick;
@@ -218,6 +221,12 @@ class _MainShellState extends State<MainShell> {
       final (String msg, String label) = switch (problem) {
         MediaCardVerdict.notificationsOff => ('系统把听歌小窝的通知关了，下拉菜单里看不到播放卡', '去开启'),
         MediaCardVerdict.channelBlocked => ('「播放控制」那一栏的通知被关掉了，播放卡出不来', '去开启'),
+        MediaCardVerdict.notificationsPaused => ('手机开着「暂停通知」，播放卡这段时间上不了屏', '去关掉'),
+        MediaCardVerdict.hiddenByRom => (
+            '播放卡已经发出去了，是手机不让它上屏，去通知设置里放行',
+            '去开启',
+          ),
+        MediaCardVerdict.postedElsewhere => ('播放卡挂在另一栏上，点一下把它挪回「播放控制」', '重发一次'),
         _ => ('歌在放，但播放卡没送到系统里，点一下重发', '重发一次'),
       };
       toast(context, msg, actionLabel: label, onAction: () => _fixCard(problem));
@@ -227,6 +236,8 @@ class _MainShellState extends State<MainShell> {
   Future<void> _fixCard(MediaCardVerdict problem) async {
     switch (problem) {
       case MediaCardVerdict.notificationsOff:
+      case MediaCardVerdict.notificationsPaused:
+      case MediaCardVerdict.hiddenByRom:
         await PowerStatus.openNotificationSettings();
       case MediaCardVerdict.channelBlocked:
         await PowerStatus.openChannelSettings();

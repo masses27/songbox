@@ -2,11 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:audio_service/audio_service.dart' show AudioService;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show IconData, Icons;
 import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding, WidgetsBindingObserver;
 import 'package:just_audio/just_audio.dart';
-import 'package:just_audio_background/just_audio_background.dart' show MediaItem;
+import 'package:songbox_audio_background/just_audio_background.dart' show JustAudioBackground, MediaItem;
 
 import '../library/library_store.dart';
 import '../models/results.dart';
@@ -179,7 +180,27 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   int cardTick = 0;
   MediaCardVerdict cardProblem = MediaCardVerdict.idle;
 
+  /// 发现「系统里没卡」时先自己重贴一次，修好了就不吵她；一个毛病只自动修一次，
+  /// 免得和重贴后那次复查来回打转。
+  bool _cardRepaired = false;
+
+  /// 应用和播放服务之间那座桥出错时既不响也不崩：audio_service 把异常全吞进
+  /// [AudioService.asyncError]，而这条流没人接就什么都留不下。「歌在放、卡永远
+  /// 不出现」最难查的正是这一种，所以必须接住、记账、写进日志。
+  int _bridgeErrors = 0;
+
+  /// 头一次报错的原文（截短）。异常名字本身就指向断在哪一跳，印在取证行上，
+  /// 一张截图就够定案，不用她再去翻日志页。
+  String? _firstBridgeError;
+  StreamSubscription<Object>? _bridgeSub;
+
   Timer? _cardTimer;
+
+  /// 桥被 idle 拆掉之后自己接回来的那一趟延时。
+  Timer? _bridgeHeal;
+
+  /// 上一次因为接桥而重贴卡的时刻。重贴会掐掉正在放的那一首半秒，两趟之间得留间隔。
+  DateTime _lastBridgeRepost = DateTime(2000);
 
   Timer? _sleepTimer;
   Timer? _sleepTick;
@@ -226,6 +247,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// 备着的歌就是唯一的保险，多备一首值得。
   bool _background = false;
 
+  /// 上一次播放器报上来的「在放吗」。只为认出后面那一下翻转是谁按的，见 [_playingSub]。
+  bool _lastPlaying = false;
+
   /// 这一次的声音是从哪儿来的，只为写进日志：出问题时第一句要问的就是
   /// 「是本机文件还是现取的网络地址」。见 [_sourceFor]。
   String _how = '';
@@ -242,6 +266,12 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _background = state != AppLifecycleState.resumed;
+    // 回到前台是查桥最划算的一刻：卡上那几个键在后台按下去是静默无反应，Dart 这边
+    // 一点动静都没有，只有她回到应用里我们才能问一句「桥还在吗」。
+    // 桥好着的话 _healBridge 直接返回，不会掐她正在听的那一首。
+    if (!_background && _ap.playing) {
+      _scheduleBridgeHeal('回到应用', after: const Duration(milliseconds: 600));
+    }
   }
 
   final Random _rnd = Random();
@@ -276,6 +306,11 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   void start() {
     if (_stateSub != null) return;
     WidgetsBinding.instance.addObserver(this);
+    // 卡上那两个箭头交给应用自己的切歌，不再走插件队列（一首一首装源时它永远
+    // 没有 next/previous）。赋的正是播放条上那同一对方法，所以界面里的行为一个
+    // 字节都没变；钩子一挂上，副本就把它进控件表，系统这才认为这两键可用。
+    JustAudioBackground.onSkipToNext = _cardSkip(next, '下一首');
+    JustAudioBackground.onSkipToPrevious = _cardSkip(previous, '上一首');
     // 预取目录里还留着上次下的整首，先扫进内存表：这趟磁盘往返不该排在第一次切歌前面。
     unawaited(AudioPrefetch.instance.prime());
     _speed = speeds.contains(AppSettings.instance.playbackSpeed) ? AppSettings.instance.playbackSpeed : 1.0;
@@ -284,10 +319,30 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     eqPresetName = savedEq == '关闭' || eqPresets.any((p) => p.name == savedEq) ? savedEq : '关闭';
     _stateSub = _ap.playerStateStream.listen((s) {
       if (s.processingState == ProcessingState.completed) _onTrackEnd();
+      // idle 是会把播放卡按掉的那一下：原生收到 idle 就 stopSelf()，onDestroy 里把
+      // 桥那半截的 listener 清空（AudioService.java:565 和 :363）。之后卡照样贴得出来
+      // （发通知走的是静态 instance，用不着 listener），按钮却全落在空处，而且界面
+      // 一点异常都收不到。放歌中途断流、地址坏掉都会报 idle，所以这里得自己接回去。
+      if (s.processingState == ProcessingState.idle) _scheduleBridgeHeal('放歌中途桥被拆了');
     });
     _playingSub = _ap.playingStream.listen((p) {
       // 那张卡是进入播放态那一刻才贴上去的，所以每次开始放之后都去原生看一眼。
-      if (p) _scheduleCardCheck();
+      if (p) {
+        _scheduleCardCheck();
+        // 清空队列之后卡上的 ▶ 还留着，按下去会把刚扔掉的那首又拽起来放。
+        if (current == null && !busy) {
+          unawaited(_ap.pause());
+          AppLog.add('卡', '卡上按了播放，可队列早就空了，重新按住');
+          notifyListeners();
+          return;
+        }
+      }
+      // 界面在身后时，playing 只可能是她从卡上那三个键（或线控）按出来的。留一行，
+      // 下次她说「按钮不动」时能一眼看出那一下到底传到播放器没有。
+      if (_background && p != _lastPlaying) {
+        AppLog.add('卡', p ? '收到卡上的播放' : '收到卡上的暂停');
+      }
+      _lastPlaying = p;
       notifyListeners();
     });
     _positionSub = _ap.positionStream.listen((p) {
@@ -296,7 +351,24 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       _maybePrefetch(p);
     });
     _errorSub = _ap.errorStream.listen(_onPlayerError);
+    // 桥那边出的错原本一个字节都不落地：接住它，日志和取证那一行才有得可看。
+    _bridgeSub = AudioService.asyncError.listen(_onBridgeError);
   }
+
+  void _onBridgeError(Object e) {
+    _bridgeErrors++;
+    // 只留头一条：桥断了之后每条状态都撞同一处，第一条才是那一下真正的原因。
+    _firstBridgeError ??= _clip('$e');
+    // 桥一旦断了会一路报错，全记会把日志那一页挤满；留下头几条和每五十条一次就够定位。
+    if (_bridgeErrors <= 5 || _bridgeErrors % 50 == 0) {
+      AppLog.add('卡', '第 $_bridgeErrors 次桥接报错 · ${humanizeError(e)}');
+    }
+    // 报错最常见的样子是原生那一侧的服务对象已经没了（setState 撞到 null），
+    // 下一次状态推送就是把卡贴回来的机会 —— 前提是那座桥先接回去。
+    if (_ap.playing) _scheduleBridgeHeal('桥连着报错');
+  }
+
+  static String _clip(String s) => s.length <= 90 ? s : '${s.substring(0, 90)}…';
 
   /// 播放中途被掐断走的是这条流，不是 [playAt] 的 catch：息屏后系统收回网络、CDN
   /// 半路断流、预取留下的半截文件都会在这里冒出来，而原来没人听它 —— 于是界面上
@@ -570,10 +642,13 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// network and no音源 round-trip. 其次是预取下来的下一首：整首已在磁盘上，
   /// 切过去和放本地文件一样快，不用再等一次建连缓冲。
   Future<AudioSource> _sourceFor(Song song) async {
+    // 播放卡的封面必须先落到本地（理由见 artFileFor）。这一发和下面找音轨并行
+    // 发起，打 tag 时多半已经回来，不给起播加时间。
+    final art = artFileFor(artUrl(song.pic, px: 300));
     final local = LibraryStore.instance.localFile(song);
     if (local != null) {
       _how = '本机下载的文件';
-      return AudioSource.file(local, tag: _mediaItem(song));
+      return AudioSource.file(local, tag: await _mediaItem(song, art));
     }
     final resolver = _urlResolver;
     if (resolver == null) throw Exception('播放组件还没就绪，请重启应用');
@@ -584,7 +659,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     final pre = await AudioPrefetch.instance.path(song, quality, servedBy: servedBy);
     if (pre != null) {
       _how = '提前备好的 ${heardQuality(quality, servedBy ?? song.source)}';
-      return AudioSource.file(pre, tag: _mediaItem(song));
+      return AudioSource.file(pre, tag: await _mediaItem(song, art));
     }
     final url = await resolver(song, quality);
     // 日志里那一档要和播放页上的是同一句话：换到 B 站的歌写「现取无损」，
@@ -592,20 +667,27 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _how = '现取 ${heardQuality(quality, LibraryStore.instance.swapSongFor(song)?.source ?? song.source)}';
     // 防盗链头按拿到的这条地址判，不按 `song.source`：换源给的是 B 站的音轨，
     // 队列里那一首却还写着网易云（不带 Referer 实测三成就 403）。
-    return AudioSource.uri(Uri.parse(url), headers: BlSource.headersFor(url), tag: _mediaItem(song));
+    return AudioSource.uri(
+      Uri.parse(url),
+      headers: BlSource.headersFor(url),
+      tag: await _mediaItem(song, art),
+    );
   }
 
   /// just_audio_background requires a MediaItem tag on every AudioSource — it
   /// is what the notification and lock screen show.
-  MediaItem _mediaItem(Song s) {
-    final art = artUrl(s.pic, px: 300);
+  ///
+  /// [art] 是 [_sourceFor] 提前发起的那次下载，这里才等它：卡上的图只能给
+  /// 本地文件路径，给 https 地址原生解不出来（永远只剩占位音符）。
+  Future<MediaItem> _mediaItem(Song s, Future<String?> art) async {
+    final file = await art;
     return MediaItem(
       id: '${s.source}:${s.songmid}',
       title: s.name.isEmpty ? '未知歌曲' : s.name,
       artist: s.singer.isEmpty ? '' : s.singer,
       album: s.albumName,
       duration: (s.interval ?? 0) > 0 ? Duration(seconds: s.interval!) : null,
-      artUri: art == null ? null : Uri.parse(art),
+      artUri: file == null ? null : Uri.file(file),
     );
   }
 
@@ -802,36 +884,114 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 那张播放卡是进入播放态那一刻由播放服务贴到系统里的，Dart 侧看不见结果，
   /// 只能过一小会儿去问原生。晚三秒是别在建连缓冲那阵子多插一次通道调用。
-  void _scheduleCardCheck() {
+  void _scheduleCardCheck({Duration after = const Duration(seconds: 3)}) {
     _cardTimer?.cancel();
-    _cardTimer = Timer(const Duration(seconds: 3), _checkMediaCard);
+    _cardTimer = Timer(after, _checkMediaCard);
+  }
+
+  /// 回到前台时补看一次：卡被「一键清理」抹掉之后不会自己回来，
+  /// 而她察觉到的第一现场往往就是这一瞬间。
+  void recheckMediaCard() {
+    if (isPlaying) _scheduleCardCheck();
+  }
+
+  /// 取证一行：原生那半截，加上我们这半截 —— 播放器想要什么状态、桥报过几次错、
+  /// 头一次报的是什么。后两样原生问不到，而它们正好把「没告诉过服务要在放」和
+  /// 「告诉了、死在桥里」分开，这两种病在她手机上看着一模一样：歌在放、有声音、
+  /// 下拉那一格永远是空的。
+  Future<MediaCardState> cardEvidence() async {
+    final st = await PowerStatus.mediaCardState();
+    return st.withBridge(_wantText(), _bridgeErrors, _firstBridgeError);
+  }
+
+  /// 我们自己这一侧的意愿。原来这里读的是插件的 `playbackStateStream`，后来查明
+  /// 那条流只在旧版 backgroundTask 接法里才被喂数据，我们这条路读到的永远是出厂
+  /// 默认值 —— 报出来会把人往错方向带，所以换成播放器的实际状态。
+  String _wantText() => '=${_ap.playing}/${_ap.processingState.name}';
+
+  /// 原生那半截桥被 idle 拆掉过，隔一会儿自己接回来。
+  ///
+  /// 不能在 idle 那一刻立刻接：原生收到 idle 只是 `stopSelf()`，服务真被销毁还要往后
+  /// 排一队消息，接早了会被那次 onDestroy 再清一遍。晚两秒是给它走完的时间。
+  void _scheduleBridgeHeal(String why, {Duration after = const Duration(seconds: 2)}) {
+    _bridgeHeal?.cancel();
+    _bridgeHeal = Timer(after, () => unawaited(_healBridge(why)));
+  }
+
+  /// 接桥。接好了顺手重贴一次卡：桥断那一刻媒体会话也被撤掉了（setActive(false) +
+  /// 通知取消），光把 listener 装回去不会让那一格自己活过来，得再走一遍进入播放态。
+  Future<void> _healBridge(String why, {bool force = false}) async {
+    final r = await PowerStatus.reattachMediaListener();
+    // alive = 桥压根没断（应用还在前台时服务被绑着，stopSelf 销毁不掉它）。
+    // 这是常态，一行日志都不占。
+    if (r == 'alive') return;
+    AppLog.add('卡', '$why · 原生那半截桥${r == 'ok' ? '已经接回去' : '接不回去（原生答 $r）'}');
+    if (r != 'ok' || !isPlaying) return;
+    final now = DateTime.now();
+    // 接桥本身不花钱，重贴卡却会把她正在听的那一首掐掉半秒，连着掐不行：
+    // 自己动的手留 20 秒间隔，她按了按钮就是明确要求，不再拦。
+    if (!force && now.difference(_lastBridgeRepost) < const Duration(seconds: 20)) return;
+    _lastBridgeRepost = now;
+    await repostCard();
   }
 
   Future<void> _checkMediaCard() async {
-    final st = await PowerStatus.mediaCardState();
+    final st = await cardEvidence();
     // 三秒里她可能已经停了：那时候「系统里没有卡」本来就该如此。
     if (!isPlaying) return;
+    // 卡明明在、按钮却按不动 —— 就是这一项。修完这一处再看别的，两种病在屏幕上长得一样。
+    if (st.listenerAlive == false) {
+      AppLog.add('卡', '复查发现卡上的按钮没连着应用，接一次 · ${st.detail}');
+      unawaited(_healBridge('复查'));
+      return;
+    }
     final verdict = st.verdict(playing: true);
+    // 能自己修的先自己修，修好了就不弹提示：audio_service 只在进入播放态那一刻贴卡，
+    // 被「一键清理」划掉之后不会自己回来，而暂停再播放正好逼它重贴一次。
+    // 但刚开头那几秒不能动手：那一趟服务也许正走在发通知的路上，重贴只会把她刚开头的歌
+    // 掐断半秒，什么也修不好。听到八秒还没卡就不是「还没走到」而是「走不到」了，
+    // 所以这里先约好第二次复查，到点再自己逼一次。
+    if (verdict == MediaCardVerdict.notPosted && !_cardRepaired) {
+      if (position.inSeconds < 8) {
+        _scheduleCardCheck(after: const Duration(seconds: 9));
+        return;
+      }
+      _cardRepaired = true;
+      AppLog.add('卡', '系统里没有播放卡，先自己重贴一次 · ${st.detail}');
+      await repostCard();
+      return;
+    }
+    if (verdict != MediaCardVerdict.notPosted) _cardRepaired = false;
     // 同一种毛病只报一次，修好了就把状态清掉，下次复发还能再报。
     if (verdict == cardProblem) return;
     cardProblem = verdict;
     // 只有真的开始放歌之后才查得到结果，所以这一行记的是状态变化，不是每次播放。
-    AppLog.add('卡', switch (verdict) {
-        MediaCardVerdict.notificationsOff => '系统把听歌小窝的通知关了，播放卡发不出去',
-        MediaCardVerdict.channelBlocked => '「播放控制」那一栏被静默，播放卡发不出去',
-        MediaCardVerdict.notPosted => '在放歌，系统里却没有播放卡',
-        MediaCardVerdict.inSystem => '播放卡已经在系统里（那一格还不显示就是手机的媒体模块没接上）',
-        _ => '问不到播放卡的状态',
-      });
+    final desc = switch (verdict) {
+      MediaCardVerdict.notificationsOff => '系统把听歌小窝的通知关了，播放卡发不出去',
+      MediaCardVerdict.channelBlocked => '「播放控制」那一栏被静默，播放卡发不出去',
+      MediaCardVerdict.notificationsPaused => '手机开着「暂停通知」，通知这段时间全都不上屏',
+      MediaCardVerdict.notPosted => '在放歌，系统里却没有播放卡',
+      MediaCardVerdict.postedElsewhere => '播放卡在系统里，只是挂在另一栏上',
+      MediaCardVerdict.hiddenByRom => '前台服务活着、通知却没上屏，被手机拦住了',
+      MediaCardVerdict.inSystem => '播放卡已经在系统里（那一格还不显示就是手机的媒体模块没接上）',
+      _ => '问不到播放卡的状态',
+    };
+    // 原始证据一并写进日志：导一次日志或截一张设置页就能定案，
+    // 不用靠猜再来一轮、再让她重装一个包。「已经在系统里」那种没什么可取证的。
+    AppLog.add('卡', verdict == MediaCardVerdict.inSystem ? desc : '$desc · ${st.detail}');
     // 卡片已经在系统里、那一格还不显示，剩下的是手机自己的媒体模块没接上 ——
     // 那不是弹个提示能解决的，设置页那一行会解释，这里不吵她。
-    if (verdict == MediaCardVerdict.notificationsOff ||
-        verdict == MediaCardVerdict.channelBlocked ||
-        verdict == MediaCardVerdict.notPosted) {
+    if (verdict != MediaCardVerdict.inSystem &&
+        verdict != MediaCardVerdict.idle &&
+        verdict != MediaCardVerdict.unknown) {
       cardTick++;
     }
     notifyListeners();
   }
+
+  /// 让界面也能催一次接桥（设置页那一行上的「接回来」）。
+  /// 她按了「接回来」就是明确要求，重贴卡那 20 秒的闸门不再拦（见 [_healBridge]）。
+  Future<void> healBridge() => _healBridge('手动接桥', force: true);
 
   /// 暂停再播放逼播放服务重新贴一次卡（audio_service 只在进入播放态那一刻
   /// startForeground），也是让手机重新认一遍这个会话。
@@ -840,6 +1000,8 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     await _ap.pause();
     await Future<void>.delayed(const Duration(milliseconds: 400));
     await _ap.play();
+    // 重发完再看一眼：真贴上了就别再提示，还是不行才拿得到下一条结论（比如被手机拦住了）。
+    _scheduleCardCheck();
   }
   Future<void> seek(Duration d) async {
     // 拖进度条也是「她听到的位置」：不回写这里，往回拖之后万一断流，重连会把人送
@@ -882,11 +1044,29 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// Retry whatever just failed.
   Future<void> retry() => playAt(index);
 
+  /// 卡上切歌那一下包一层：动作就是界面里那两个键的 [action]，这里只多记一行
+  /// 「她是按了卡」，并把异常接住 —— 让它逃进 media 通道只会换成一次错误回执，
+  /// 日志上什么都看不见。
+  Future<void> Function() _cardSkip(Future<void> Function() action, String label) {
+    return () async {
+      if (_background) AppLog.add('卡', '卡上按了$label');
+      try {
+        await action();
+      } catch (e) {
+        AppLog.add('卡', '卡上$label没走通 · ${humanizeError(e)}');
+      }
+    };
+  }
+
   Future<void> stopAndClear() async {
     _generation++;
     // 队列清空了，后台那批「找免费版」也就没意义了。
     _vipScanGen++;
-    await _ap.stop();
+    // 只能暂停，不能 stop：once 播放器进 idle，audio_service 就把整个前台服务
+    // 停掉、并把 Dart 侧的 listener 置空（AudioService.java:565 和 :360-384）。
+    // 之后服务被系统重建时卡还能贴出来，但每个按钮都落在 null listener 上——
+    // 界面点得动、卡上点了没反应，而且 Dart 侧没有任何补救办法。
+    await _ap.pause();
     _netRetry?.cancel();
     _netRetry = null;
     _netRetries = 0;
@@ -1149,12 +1329,17 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _sleepTimer?.cancel();
     _sleepTick?.cancel();
     _cardTimer?.cancel();
+    _bridgeHeal?.cancel();
     _netRetry?.cancel();
     unawaited(_stateSub?.cancel());
     unawaited(_playingSub?.cancel());
     unawaited(_positionSub?.cancel());
     unawaited(_errorSub?.cancel());
-    unawaited(_ap.dispose());
+    unawaited(_bridgeSub?.cancel());
+    // 留着播放器实例不 dispose：`AudioPlayer.dispose()` 头一步就是 stop()，
+    // 那一下会把 idle 发出去，前台服务跟着被停、桥那头的 listener 被清空
+    // ——界面还在，卡上的键从此全空转。这个进程本来就只有退出时才需要收回播放器，
+    // 而那时候系统连同服务一起收走。
     super.dispose();
   }
 }
