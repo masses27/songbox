@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 圆标本体略扁（895×840），前景层按「整枚装进 72dp 可见区」铺，背景层透明：
+     任何遮罩都切不到盘体，桌面看到的就是图本身的形状。安卓 8 以下的方形图标同理。 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/ic_launcher_background" />
+    <background android:drawable="@android:color/transparent" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>
