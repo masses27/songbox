@@ -44,12 +44,12 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 
 打完包核这两眼：`aapt2 dump resources` 里 `drawable/audio_service_*` 该有七枚，`build/app/outputs/mapping/release/mapping.txt` 里 `AudioService`、`AudioService$ServiceListener`、`AudioServicePlugin` 都该映射到自己。
 
-### 桌面图标故意不做自适应图标
+### 桌面图标故意不做自适应图标，但整张必须铺满
 
-`res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png` 五张普通方形 PNG（48/72/96/144/192），圆盘在画布里收到 92%、四角全透明。仓库里没有 `mipmap-anydpi-v26/ic_launcher.xml` 是被删掉的，别照安卓文档里的「最佳实践」补回来：
+`res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png` 五张整幅铺满的方形 PNG（48/72/96/144/192）：圆盘画满整个宽度，四角用画面自己的夜色做一层虚化底补上，一个透明像素都不留。仓库里没有 `mipmap-anydpi-v26/ic_launcher.xml` 是被删掉的，别照安卓文档里的「最佳实践」补回来：
 
 - 自适应图标是 108dp 画布只露中间 72dp，遮罩和缩放都由桌面说了算。华为/鸿蒙桌面会强制套圆角壳、还把图层放大到填满遮罩，一枚圆盘放进去出来就是方块，边上照样啃掉一块——前景层缩到多少都没用。
-- 不给自适应图标，桌面回落到 legacy 位图按原样画，最坏情况再套一次圆角；那 8% 的余量就是留给这一套的，切到的是本来空着的四角，圆盘一点不动。
+- 回落到 legacy 位图之后桌面按原样画，但它会先给普通位图垫一层白底再套圆角：四角留透明就是四个白角，跟旁边一格格的图标一比特别难看。所以「铺满」这件事得图自己做。
 - 兼容别家桌面本该留 `mipmap-anydpi-v26`，可那正好把她的机器推回套壳那条路，两个要求互斥，所以按装机那台来。
 
 ## 测试
