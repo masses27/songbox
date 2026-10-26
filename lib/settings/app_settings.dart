@@ -2,8 +2,8 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../util/app_paths.dart';
 import '../util/json_file.dart';
 
 /// User preferences that must survive restarts: playback quality and search
@@ -17,7 +17,7 @@ class AppSettings extends ChangeNotifier {
 
   /// 和 pubspec.yaml 同步；build.sh 每次打包前按 pubspec 改写这一行，
   /// 「关于」上写错版本号会把她截图里的版本带偏，而排查全靠那句版本。
-  static const appVersion = '0.8.34';
+  static const appVersion = '0.8.35';
 
   String quality = '320k';
   final List<String> searchHistory = [];
@@ -57,7 +57,7 @@ class AppSettings extends ChangeNotifier {
   Future<void> init() async {
     if (_loaded) return;
     _loaded = true;
-    final d = await getApplicationDocumentsDirectory();
+    final d = await AppPaths.root();
     _file = File('${d.path}/settings.json');
     final j = JsonFile.read(_file);
     if (j is Map) {

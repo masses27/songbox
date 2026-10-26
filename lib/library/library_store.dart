@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../models/results.dart';
 import '../models/song.dart';
+import '../util/app_paths.dart';
 import '../util/json_file.dart';
 import 'taste_profile.dart';
 import 'user_playlist.dart';
@@ -83,7 +83,7 @@ class LibraryStore extends ChangeNotifier {
 
   Future<void> init() async {
     if (_loaded) return;
-    _root = Directory('${(await getApplicationDocumentsDirectory()).path}/library');
+    _root = await AppPaths.sub('library');
     if (!_root.existsSync()) _root.createSync(recursive: true);
     for (final kind in LibraryKind.values) {
       final data = JsonFile.read(_file(kind));

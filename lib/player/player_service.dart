@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:audio_service/audio_service.dart' show AudioService;
@@ -137,9 +138,14 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _vipScanner = scanVip;
   }
 
+  /// 安卓的系统均衡器。桌面版上它不进音频管道，也就永远不会去碰那条不存在的通道。
   final AndroidEqualizer _eq = AndroidEqualizer();
-  late final AudioPlayer _ap =
-      AudioPlayer(audioPipeline: AudioPipeline(androidAudioEffects: [_eq]));
+
+  late final AudioPlayer _ap = AudioPlayer(
+    // androidAudioEffects 会让 just_audio 去安卓那侧建一个伴生播放器挂效果器，桌面上
+    // 那次调用没人接。给一条空管道，其余（音量、倍速、seek）照旧。
+    audioPipeline: Platform.isAndroid ? AudioPipeline(androidAudioEffects: [_eq]) : AudioPipeline(),
+  );
 
   final List<Song> queue = [];
   int index = -1;
@@ -885,6 +891,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// 那张播放卡是进入播放态那一刻由播放服务贴到系统里的，Dart 侧看不见结果，
   /// 只能过一小会儿去问原生。晚三秒是别在建连缓冲那阵子多插一次通道调用。
   void _scheduleCardCheck({Duration after = const Duration(seconds: 3)}) {
+    // 那张卡是安卓下拉菜单里的东西：桌面版没有通知、也没有那座桥。真去问一圈会得到
+    // 「问不到播放卡的状态」，每放一首报一次，全是噪音。
+    if (!Platform.isAndroid) return;
     _cardTimer?.cancel();
     _cardTimer = Timer(after, _checkMediaCard);
   }
@@ -1261,6 +1270,8 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Whether the platform exposes a parametric EQ (Android only today).
   Future<bool> eqSupported() async {
+    // 桌面版连那条通道都没有，答案先写好，不用等一次注定失败的调用。
+    if (!Platform.isAndroid) return false;
     try {
       final params = await _eq.parameters.timeout(const Duration(seconds: 3));
       return params.bands.isNotEmpty;

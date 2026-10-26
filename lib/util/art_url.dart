@@ -14,7 +14,8 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
-import 'package:path_provider/path_provider.dart';
+
+import 'app_paths.dart';
 
 const _steps = [120, 200, 300, 400, 600];
 
@@ -91,10 +92,8 @@ Directory? _artDir;
 Future<Directory> _artDirOf() async {
   final d = _artDir;
   if (d != null) return d;
-  // 和预取目录同一处外部私有目录：不进系统备份，也不挤内部存储。
-  final ext = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
-  final out = Directory('${ext.path}/covers');
-  if (!out.existsSync()) out.createSync(recursive: true);
+  // 和预取目录同一处：安卓是应用私有目录（不进系统备份，也不挤内部存储），桌面版是包旁边的 data/。
+  final out = await AppPaths.sub('covers');
   _artDir = out;
   return out;
 }

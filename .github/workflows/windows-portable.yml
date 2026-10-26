@@ -39,6 +39,24 @@ jobs:
         shell: pwsh
         run: flutter create --platforms=windows --project-name lyric_music .
 
+      - name: 窗口标题写中文名
+        shell: pwsh
+        # 壳子是现造的，所以标题也只能在这儿改：模板里那句是英文包名，任务栏和标题栏
+        # 上顶着一个 lyric_music 太难认。写进 main.cpp 的是 \u 转义（听歌小窝四个码位）
+        # 而不是汉字本身，为的是那份 C++ 源文件保持纯 ASCII —— RC/MSVC 对各机的代码页
+        # 不一样，直接塞汉字哪天就编成乱码。转义串在这里用字符码拼出来，省得 YAML 里
+        # 反斜杠到底剩几层还得猜。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $f = 'windows/runner/main.cpp'
+          $t = Get-Content -Raw -Path $f
+          $bs = [char]92
+          $title = 'L"' + $bs + 'u542c' + $bs + 'u6b4c' + $bs + 'u5c0f' + $bs + 'u7a9d"'
+          $t2 = $t.Replace('L"lyric_music"', $title)
+          if ($t2 -eq $t) { throw "main.cpp 里没找到那句标题，改动没落地" }
+          Set-Content -Path $f -Value $t2 -Encoding ascii -NoNewline
+          Select-String -Path $f -Pattern 'window.Create'
+
       - name: pub get
         shell: pwsh
         run: flutter pub get
@@ -60,6 +78,14 @@ jobs:
           if (-not (Test-Path $src)) { $src = 'build/windows/x64/Release' }
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item -Path "$src/*" -Destination $stage -Recurse -Force
+
+          # 这一版要验的不是「exe 能不能起」而是「能不能出声」：声音全靠 libmpv 那颗
+          # DLL，media_kit_libs_windows_audio 会在 cmake 阶段把它拉下来拷到 exe 旁边。
+          # 少了它 exe 照样跑得起来、照样放不出歌，所以在这儿当失败拦掉，别让她试。
+          $mpv = Get-ChildItem -Path $stage -Filter 'libmpv-2.dll' -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $mpv) { throw 'libmpv-2.dll 没进包：media_kit 那条音频后端起不来' }
+          "libmpv: $([math]::Round($mpv.Length/1MB,1))MB"
 
           # 干净机器不一定装了 VC++ 运行库；runner 上的 VS 带着可再发行版本，抄三个
           # DLL 进去就是「拷走双击能跑」。找不到就跳过，不让整个构建失败。

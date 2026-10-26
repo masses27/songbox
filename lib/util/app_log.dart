@@ -1,9 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
-
 import '../settings/app_settings.dart';
+import 'app_paths.dart';
 
 /// 听歌日志。
 ///
@@ -27,8 +26,7 @@ class AppLog {
     if (_dir != null) return;
     Directory d;
     try {
-      d = Directory('${(await getApplicationDocumentsDirectory()).path}/logs');
-      if (!d.existsSync()) d.createSync(recursive: true);
+      d = await AppPaths.sub('logs');
       _prune(d);
     } catch (_) {
       // 日志起不来不该把冷启动带崩，也不该让后面每一行都去试一遍。

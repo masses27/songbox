@@ -2,10 +2,10 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:path_provider/path_provider.dart';
 
 import '../engine/lx_engine.dart';
 import '../library/library_store.dart';
+import '../util/app_paths.dart';
 import '../util/json_file.dart';
 
 class SourceMeta {
@@ -121,9 +121,7 @@ class SourceManager {
   SourceManager._();
 
   Future<void> init() async {
-    final docs = await getApplicationDocumentsDirectory();
-    _dir = Directory('${docs.path}/sources');
-    if (!await _dir.exists()) await _dir.create(recursive: true);
+    _dir = await AppPaths.sub('sources');
     if (_indexFile.existsSync()) {
       final arr = JsonFile.read(_indexFile);
       if (arr is List) {

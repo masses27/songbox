@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:songbox_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
 
@@ -22,20 +24,29 @@ import 'ui/widgets.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Must run before any AudioPlayer is created: it replaces just_audio's
-  // platform implementation with one that drives the media notification.
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'com.wyj.music.lyric_music.playback',
-    androidNotificationChannelName: '播放控制',
-    androidNotificationChannelDescription: '听歌小窝后台播放与锁屏控制',
-    androidNotificationOngoing: true,
-    // 暂停时不退前台服务：MIUI / ColorOS 会优先杀没有前台通知的进程，
-    // 暂停接个电话回来歌单就没了。通知常驻的代价小得多。
-    androidStopForegroundOnPause: false,
-    // 封面按原图（常常 1000px 以上）取回来说通知栏用，既慢又占内存。
-    artDownscaleWidth: 512,
-    artDownscaleHeight: 512,
-  );
+  if (Platform.isWindows) {
+    // 桌面版的声音：just_audio 官方只写了安卓和 Apple 两条后端，Windows 上每一次播放
+    // 调用都是 MissingPluginException（界面照样起得来，就是永远放不出）。media_kit 那套
+    // libmpv 顶上这一格。它默认只接 Windows/Linux，所以安卓那条路连这行都走不到。
+    // title 是音量混合器里那一格显示的名字，留着默认的插件名太难认。
+    JustAudioMediaKit.title = '听歌小窝';
+    JustAudioMediaKit.ensureInitialized();
+  } else {
+    // Must run before any AudioPlayer is created: it replaces just_audio's
+    // platform implementation with one that drives the media notification.
+    await JustAudioBackground.init(
+      androidNotificationChannelId: 'com.wyj.music.lyric_music.playback',
+      androidNotificationChannelName: '播放控制',
+      androidNotificationChannelDescription: '听歌小窝后台播放与锁屏控制',
+      androidNotificationOngoing: true,
+      // 暂停时不退前台服务：MIUI / ColorOS 会优先杀没有前台通知的进程，
+      // 暂停接个电话回来歌单就没了。通知常驻的代价小得多。
+      androidStopForegroundOnPause: false,
+      // 封面按原图（常常 1000px 以上）取回来说通知栏用，既慢又占内存。
+      artDownscaleWidth: 512,
+      artDownscaleHeight: 512,
+    );
+  }
   // 三个存储互不相干，并行读，冷启动少等两次磁盘。
   await Future.wait([
     AppSettings.instance.init(),

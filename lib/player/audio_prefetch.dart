@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../models/song.dart';
 import '../music_sdk/bl_source.dart';
 import '../settings/app_settings.dart';
+import '../util/app_paths.dart';
 
 /// 提前把下一首整首下到应用私有目录，切过去那一刻直接读本地文件。
 ///
@@ -135,10 +135,8 @@ class AudioPrefetch {
   Future<Directory> _dirOf() async {
     final d = _dir;
     if (d != null) return d;
-    // 和下载目录一样放外部私有目录：那里不算系统备份的范围，也不会挤内部存储。
-    final ext = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
-    final out = Directory('${ext.path}/prefetch');
-    if (!out.existsSync()) out.createSync(recursive: true);
+    // 和下载目录同一处：安卓是应用私有目录（不进系统备份，也不挤内部存储），桌面版是包旁边的 data/。
+    final out = await AppPaths.sub('prefetch');
     _dir = out;
     return out;
   }

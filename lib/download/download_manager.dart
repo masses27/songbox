@@ -3,13 +3,13 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../library/library_store.dart';
 import '../models/song.dart';
 import '../music_sdk/bl_source.dart';
 import '../settings/app_settings.dart';
 import '../ui/pages/builtin_library.dart';
+import '../util/app_paths.dart';
 import '../util/humanize.dart';
 
 /// Downloads a resolved song URL to the app's external files/Music directory.
@@ -189,17 +189,14 @@ class DownloadManager extends ChangeNotifier {
   static Future<List<Directory>> _cacheDirs() async {
     final out = <Directory>[Directory.systemTemp];
     try {
-      final d = await getApplicationDocumentsDirectory();
-      out.add(Directory('${d.path}/cachefile'));
+      out.add(Directory('${(await AppPaths.root()).path}/cachefile'));
     } catch (_) {}
     return out;
   }
 
   /// App-private Music folder (Android 10+ scoped storage friendly).
-  static Future<Directory> musicDir() async {
-    final extDir = await getExternalStorageDirectory();
-    return Directory('${(extDir ?? await getApplicationDocumentsDirectory()).path}/Music');
-  }
+  /// 桌面版落在包旁边的 `data/Music`。这里只算路径不建目录：查个占用也要建文件夹就多余了。
+  static Future<Directory> musicDir() async => Directory('${(await AppPaths.root()).path}/Music');
 
   static Future<int> musicDirBytes() async {
     final dir = await musicDir();

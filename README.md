@@ -52,6 +52,22 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 - 回落到 legacy 位图之后桌面按原样画，但它会先给普通位图垫一层白底再套圆角：四角留透明就是四个白角，跟旁边一格格的图标一比特别难看。所以「铺满」这件事得图自己做。
 - 兼容别家桌面本该留 `mipmap-anydpi-v26`，可那正好把她的机器推回套壳那条路，两个要求互斥，所以按装机那台来。
 
+## Windows 免安装版
+
+同一套 Dart 代码也能在桌面上跑，产物是一个 zip，解压双击 `lyric_music.exe` 就行，不用装任何东西（VC++ 运行库那三颗 DLL 一并抄进包里）。
+
+构建走 GitHub Actions：仓库的 Actions 页 → `windows-portable` → Run workflow（`.github/workflows/windows-portable.yml`，只有 `workflow_dispatch`，产物是 `songbox-<version>-windows-x64-portable.zip`）。
+
+必须在 Actions 上编，本机编不了：`flutter build windows` 要能建符号链接，而这台机的账号既没有 `SeCreateSymbolicLinkPrivilege`，开发者模式也开不了（要写 `HKLM\...\AppModelUnlock`，得管理员）。runner 上这两条现成。
+
+几个决定记在这儿，免得下次照安卓那套去猜：
+
+- 仓库里不提交 `windows/` 那套 C++ 壳子，workflow 里 `flutter create --platforms=windows` 现造。日后 `flutter upgrade` 改壳子文件不会来来回回产生噪声 diff；窗口标题（`L"听歌小窝"`，写成 `\u` 转义让 main.cpp 保持纯 ASCII）也只能在这一步改。
+- 声音换了后端：`just_audio` 官方只有 `android/` 和 `darwin/` 两条实现，桌面上每次播放调用都是 `MissingPluginException` —— 界面起得来、就是放不出。所以加了 `just_audio_media_kit`（libmpv），`main.dart` 里只在 `Platform.isWindows` 那一支注册，原来那句 `JustAudioBackground.init` 原样挪进 `else`；`player_service.dart` 的音频管道同理，安卓走的还是原来那条。libmpv 由 `media_kit_libs_windows_audio` 在构建时拉下来拷到 exe 旁边，构建那步会验它在不在包里。
+- 数据落在 exe 旁边的 `data/`（`lib/util/app_paths.dart`）。桌面版 `getApplicationDocumentsDirectory()` 返回的是用户的「文档」根目录，不收敛就会把 `settings.json`、`library/`、`logs/`、`sources/` 全撒进她的文档里；`data/` 跟着包走，U 盘拷一份就是完整一套。旁边写不动时才退回应用支持目录。安卓落点不变。
+- 安卓专属那几样在桌面上直接绕开，不去试：系统均衡器（`AndroidEqualizer` 走 MethodChannel）、下拉菜单那张播放卡的整条自检与接桥。设置页里「这台设备没有提供系统均衡器」那句就是给桌面版的。
+- 已知短处：lx-music 音源脚本在桌面上激活会超时（QuickJS 那条桥），能出声的是四个端内直连；桌面上也没有媒体会话，切歌只能回应用里点。
+
 ## 测试
 
 ```bash
@@ -69,7 +85,7 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 - `lib/player/` —— just_audio + 后台服务，队列、换源、断网重试、播放卡取证与接桥都在这儿
 - `lib/library/` —— 本机数据：收藏、自建歌单、播放历史、口味画像（推荐吃这个，不联网）
 - `lib/download/` —— 下载与均衡器
-- `lib/util/` —— 日志、封面地址与本地封面文件、人话化错误、原生通道
+- `lib/util/` —— 日志、封面地址与本地封面文件、人话化错误、原生通道、数据落点（`app_paths.dart`，安卓与桌面各归各处）
 - `lib/ui/` —— 页面、组件、色板
 - `assets/js/sources/` —— 内置音源脚本（第三方）
 - `third_party/songbox_audio_background/` —— just_audio_background 0.0.1-beta.17 的副本，只为把卡上「上一首/下一首」接到应用自己的切歌（上游接的是它自己的 `skipToQueueItem`，而本项目一首一首装 AudioSource，队列里永远只有一项）。改动只有三处：两个静态钩子、`skipToNext/Previous` 先走钩子、控件表在钩子装着时放行那两个键。升上游版本时这三处要重新对齐，`test/card_skip_seam_test.dart` 会先响。

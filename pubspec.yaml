@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.8.34+47
+version: 0.8.35+48
 
 environment:
   sdk: ^3.13.5
@@ -49,6 +49,16 @@ dependencies:
   # 直接 import audio_service —— 这个包本来就在依赖树里、也早就打进 APK，这里只是
   # 把它从「间接依赖」写成「直接依赖」，装的东西一个字节都没多。
   audio_service: ^0.18.19
+  # Windows 桌面版要出声就得给 just_audio 一个 Windows 实现：官方那套只有
+  # android/ 和 darwin/，桌面上一切播放调用都是 MissingPluginException（界面起得来、
+  # 就是放不出）。media_kit（libmpv）这条后端只在 Platform.isWindows 那一支注册。
+  # 两个包都没有 android/ 目录、也不参与插件注册，所以安卓那条构建线不会新增原生依赖；
+  # 跟着进来的 media_kit / image / archive / safe_local_storage / posix / uri_parser /
+  # universal_platform 同样全是 Dart 侧（依赖树一共新增 9 个）。代码量对 APK 的影响
+  # 要等下次打包才看得出来，这里不提前替它担保。
+  just_audio_media_kit: ^2.1.0
+  # libmpv 那颗 DLL 由它在构建时拉下来并拷到 exe 旁边；workflow 那步会验它在不在包里。
+  media_kit_libs_windows_audio: any
 
 dev_dependencies:
   flutter_test:
