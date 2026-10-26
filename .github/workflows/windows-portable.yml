@@ -1,0 +1,88 @@
+name: windows-portable
+
+# 本机编不了 Windows：flutter build windows 要求能建符号链接，而这台机的账号没有
+# SeCreateSymbolicLinkPrivilege、开发者模式也没开（开它要写 HKLM）。runner 上这两条都
+# 现成，所以 Windows 产物一律在这里编，Android 那条 build.sh 完全不受影响。
+#
+# 仓库里不提交 windows/ 那套 C++ 壳子，构建时在临时 workspace 里现造一份，
+# 免得日后 flutter upgrade 改壳子文件时来来回回产生噪声 diff。
+on:
+  workflow_dispatch:
+    inputs:
+      only_dir:
+        description: '留空即正常构建；填 skip 用于验证 workflow 本身'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-portable
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # 和装机那台对齐；本机 flutter doctor 也是这个版本。
+          flutter-version: '3.47.7'
+          channel: 'stable'
+          cache: true
+
+      - name: 造出 windows/ 壳子
+        shell: pwsh
+        run: flutter create --platforms=windows --project-name lyric_music .
+
+      - name: pub get
+        shell: pwsh
+        run: flutter pub get
+
+      - name: 构建 release
+        shell: pwsh
+        run: flutter build windows --release
+
+      - name: 组装免安装包
+        shell: pwsh
+        env:
+          ONLY_DIR: ${{ inputs.only_dir }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hit = Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)' | Select-Object -First 1
+          $ver = $hit.Matches[0].Groups[1].Value.Split('+')[0]
+          $stage = "dist/songbox-$ver-windows-x64"
+          $src = 'build/windows/x64/runner/Release'
+          if (-not (Test-Path $src)) { $src = 'build/windows/x64/Release' }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path "$src/*" -Destination $stage -Recurse -Force
+
+          # 干净机器不一定装了 VC++ 运行库；runner 上的 VS 带着可再发行版本，抄三个
+          # DLL 进去就是「拷走双击能跑」。找不到就跳过，不让整个构建失败。
+          $crt = Get-ChildItem -Path 'C:\Program Files*\Microsoft Visual Studio' -Recurse -Filter 'vcruntime140.dll' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if ($crt) {
+            $crtDir = $crt.DirectoryName
+            foreach ($d in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+              $p = Join-Path $crtDir $d
+              if (Test-Path $p) { Copy-Item $p $stage -Force }
+            }
+            "bundled CRT from $crtDir"
+          } else {
+            'VC++ runtime DLLs not located on runner; skipped'
+          }
+
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/songbox-$ver-windows-x64-portable.zip" -Force
+          Get-ChildItem dist | ForEach-Object { "$($_.Name)  $([math]::Round($_.Length/1MB,1))MB" }
+
+      - name: 上传免安装产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: songbox-windows-x64-portable
+          path: dist/songbox-*-windows-x64-portable.zip
+          if-no-files-found: error
+          retention-days: 14
