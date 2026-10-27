@@ -56,9 +56,9 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 
 ## Windows 免安装版
 
-同一套 Dart 代码也能在桌面上跑，产物是一个 zip，解压双击 `lyric_music.exe` 就行，不用装任何东西（VC++ 运行库那三颗 DLL 一并抄进包里）。
+同一套 Dart 代码也能在桌面上跑，产物有形态两份：一个 zip（解压双击 `lyric_music.exe`）和一颗自解压的单文件 exe（下面两节各说一种），都不用装任何东西（VC++ 运行库那三颗 DLL 一并抄进包里）。
 
-构建走 GitHub Actions：仓库的 Actions 页 → `windows-portable` → Run workflow（`.github/workflows/windows-portable.yml`，只有 `workflow_dispatch`，产物是 `songbox-<version>-windows-x64-portable.zip`）。
+构建走 GitHub Actions：仓库的 Actions 页 → `windows-portable` → Run workflow（`.github/workflows/windows-portable.yml`，只有 `workflow_dispatch`，一次出两份产物：`songbox-<version>-windows-x64-portable.zip` 和 `songbox-<version>-windows-x64-single.exe`）。
 
 必须在 Actions 上编，本机编不了：`flutter build windows` 要能建符号链接，而这台机的账号既没有 `SeCreateSymbolicLinkPrivilege`，开发者模式也开不了（要写 `HKLM\...\AppModelUnlock`，得管理员）。runner 上这两条现成。
 
@@ -70,6 +70,22 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 - 安卓专属那几样在桌面上直接绕开，不去试：系统均衡器（`AndroidEqualizer` 走 MethodChannel）、下拉菜单那张播放卡的整条自检与接桥。均衡器那一页里「这台设备没有提供系统均衡器」那句就是给桌面版的。
 - 已知短处：lx-music 音源脚本在桌面上激活会超时（QuickJS 那条桥，日志里那句「音源脚本激活失败」就是它），能出声的是四个端内直连；桌面上也没有媒体会话，切歌只能回应用里点。
 - 验到哪一步了：0.8.35 那个包在本机起得来、界面和封面都正常，`libmpv-2.dll` 确实加载进了进程，旧版那句 `MissingPluginException(… just_audio.methods)` 不再出现，数据也确实落在 `data/` 而没碰「文档」。播放也真点过了：`data/logs/play-2026-10-27.log` 里三行 `[播]`（一首 B 站 192k、两首提前备好的 320k），队列自己往下走，`library/play_stats.json` 记到「阿刁」听到 371 秒（全长 374）并算完播、「米店」336 秒算完播——那是播放位置一路推进出来的数，不是点一下就能伪造的。`[崩]` 一条没有。剩最后一格没勾：耳机里到底有没有声，只有她耳朵能判。
+
+## Windows 单文件版
+
+zip 那份要用，就得一直留着那个文件夹：她桌面要么堆一层目录，要么放个快捷方式指进去。单文件那份把这些都省了——桌面永远只有 `听歌小窝.exe` 一颗（0.8.36 实测 20.8MB），双击就完事。
+
+做法是启动器 + 尾巴：`tool/win_single/launcher.cs` 用 runner 上现成的 `csc.exe`（.NET Framework 4.8 自带，不额外装东西）编成一颗 210KB 的 exe，再把 zip 那一份整个接在它尾巴上。PE 只看头部那些节，尾巴上的字节当资源多余的部分忽略，所以这文件既是能跑的程序又是一份完整 zip；启动器按 zip 自己的 EOCD 往回算出尾巴起点（`blobStart = eocd绝对位置 - 中央目录长度 - 中央目录起始偏移`），把 blob 切出来解到 `%LOCALAPPDATA%\听歌小窝\`，再从那儿拉起 `lyric_music.exe`。payload 是 38 个条目（31 个文件 + 7 个目录项，压缩 20.6MB、解出来 47.2MB），第一次解压实测一秒左右；之后版本号和 `songbox-version.txt` 那枚戳记一致就直接跳过解压。
+
+几条写死了的理由：
+
+- 落点选 `%LOCALAPPDATA%\听歌小窝\` 而不是临时目录：数据是 `AppPaths` 按「exe 旁边的 `data/`」放的，跟着 exe 走，所以程序文件解在哪儿数据就在哪儿，固定落点 = 她的收藏和日志有个稳定的家。代价是不再「跟着文件走」——把这颗 exe 拷去别的机器，第一次会在对方机器上重新解一套空的。zip 那份还留着，要带走数据就拷整个文件夹。
+- 升级只重写程序文件，她的东西一个字不碰：payload 里带 `data/` 开头的只有引擎自己那三样（`app.so`、`icudtl.dat`、`flutter_assets/**`），38 个条目里没有一个 `data/library`、`data/logs`、`data/sources` 或 `settings.json`；`CopyOut` 又逐条按 zip 里的路径写、先落 `.new` 再换（半截 dll 是中断的更新把整套变成起不来的来路），够不着她的收藏、播放统计、日志和她自己导入的音源脚本。换新版 = 覆盖桌面那颗 exe，下次双击版本号对不上就重解一遍。
+- 已经开着的时候不硬来：戳记是最新但进程在跑，就把那个窗口拉回前台，不再开第二个；戳记是旧的而进程在跑，直接提示「先把它关掉再点一次」退出——半覆盖正在运行的程序文件是版本混着用的来路。
+- 图标走 `-win32icon:`，用和安卓同源那套 PNG 手拼的 ICO（16/24/32/48/64/96/128/192 八帧），和 zip 那份的 `app.ico` 逐像素一样。桌面那颗 exe 的图标、任务栏、资源管理器预览都是它。尾巴上的 zip 不重打包，就是那一份原样接上去，所以两份产物的 38 个 payload 文件必然同一串 SHA256（本机对过），上面「验到哪一步了」那条对两份同样成立。
+- 两份都没签名，浏览器和 SmartScreen 该拦还是会拦，这点和 zip 那份里那颗 exe 一样。
+
+启动器源码里那三行 `\u` 转义的汉字不是凑字数：`csc` 读没 BOM 的文件按各机 ANSI 代码页解码，源码里塞汉字哪天就编成乱码——和 `main.cpp` 的窗口标题同一个理由。调试开关 `/dir:<路径>`（解到别处）和 `/check`（只解压不启动）、`/log:<路径>`（winexe 没控制台，话只能写文件）留给 CI 和本机复现用，她双击时一个都不会碰到。
 
 ## 测试
 

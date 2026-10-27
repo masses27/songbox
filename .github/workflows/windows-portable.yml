@@ -73,6 +73,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $hit = Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)' | Select-Object -First 1
           $ver = $hit.Matches[0].Groups[1].Value.Split('+')[0]
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Set-Content -Path dist/version.txt -Value $ver -Encoding ascii -NoNewline
           $stage = "dist/songbox-$ver-windows-x64"
           $src = 'build/windows/x64/runner/Release'
           if (-not (Test-Path $src)) { $src = 'build/windows/x64/Release' }
@@ -105,10 +107,154 @@ jobs:
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/songbox-$ver-windows-x64-portable.zip" -Force
           Get-ChildItem dist | ForEach-Object { "$($_.Name)  $([math]::Round($_.Length/1MB,1))MB" }
 
+      - name: 单文件版
+        shell: powershell
+        # 这一整步走 Windows PowerShell 5.1 而不是默认那层 pwsh 7：System.Drawing 和
+        # csc.exe 都是 .NET Framework 上的东西，5.1 在 runner 上必定有，本机我也是用
+        # 5.1 验的，两边同一条路；pwsh 7 里的 System.Drawing 是另一套（Drawing.Common），
+        # 我不想为一颗图标赌它。
+        #
+        # 注意下面那段脚本里一个字汉字都没有：Actions 把 run 写成临时 .ps1 是不带 BOM 的
+        # UTF-8，5.1 读不带 BOM 的文件按机器 ANSI 代码页解——上一版桌面脚本就是这么把文件夹
+        # 名解成「--windows-x64」的。理由全写在这条注释里（YAML 自己按 UTF-8 解析，不经
+        # PowerShell 的手），脚本正文只留 ASCII。
+        #
+        # Icon: built here from the Android master PNG instead of committing an .ico.
+        # The logo changed three times around 0.8.32-0.8.34, and a committed binary is
+        # exactly what the next logo change forgets to regenerate.
+        # Payload: the portable zip is *appended* to the launcher exe, so the
+        # deliverable stays one file and the zip remains a complete archive. Because the
+        # appended blob keeps its own central-directory offsets, ZipFile.OpenRead on the
+        # exe reports 0 entries -- hence the EOCD math below, mirrored inside the
+        # launcher (see tool/win_single/launcher.cs).
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = (Get-Content dist/version.txt -Raw).Trim()
+          $zip = "dist/songbox-$ver-windows-x64-portable.zip"
+          if (-not (Test-Path $zip)) { throw "portable zip missing: $zip" }
+
+          $master = 'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png'
+          if (-not (Test-Path $master)) { throw "icon master missing: $master" }
+          Add-Type -AssemblyName System.Drawing
+          $srcImg = [System.Drawing.Image]::FromFile((Resolve-Path $master).Path)
+          $sizes = @(16, 24, 32, 48, 64, 96, 128, 192)
+          $blobs = @()
+          foreach ($s in $sizes) {
+            $bmp = New-Object System.Drawing.Bitmap $s, $s
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $g.DrawImage($srcImg, 0, 0, $s, $s)
+            $g.Dispose()
+            $ms = New-Object System.IO.MemoryStream
+            $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+            $bmp.Dispose()
+            $blobs += , $ms.ToArray()
+            $ms.Dispose()
+          }
+          $srcImg.Dispose()
+
+          # PNG frames inside an ICO container (Vista and later desktops read it).
+          # Width/height bytes: 0 means 256, so anything below that must be literal --
+          # writing 0 for a 192 frame tells the desktop it is 256x256 and it resamples
+          # the wrong thing.
+          $ico = Join-Path $env:RUNNER_TEMP 'songbox.ico'
+          $ms2 = New-Object System.IO.MemoryStream
+          $bw = New-Object System.IO.BinaryWriter($ms2)
+          $bw.Write([UInt16]0); $bw.Write([UInt16]1); $bw.Write([UInt16]$sizes.Count)
+          $off = 6 + (16 * $sizes.Count)
+          for ($i = 0; $i -lt $sizes.Count; $i++) {
+            $s = $sizes[$i]
+            $b = $blobs[$i]
+            $w = $(if ($s -ge 256) { 0 } else { $s })
+            $bw.Write([Byte]$w); $bw.Write([Byte]$w)
+            $bw.Write([Byte]0); $bw.Write([Byte]0)
+            $bw.Write([UInt16]1); $bw.Write([UInt16]32)
+            $bw.Write([UInt32]$b.Length); $bw.Write([UInt32]$off)
+            $off += $b.Length
+          }
+          foreach ($b in $blobs) { $bw.Write($b) }
+          $bw.Flush()
+          [System.IO.File]::WriteAllBytes($ico, $ms2.ToArray())
+          $bw.Dispose(); $ms2.Dispose()
+          "icon: $((Get-Item $ico).Length) bytes"
+
+          # Same rule as the window title in main.cpp: the launcher source stays ASCII and
+          # spells its Chinese with \u escapes, because csc also decodes BOM-less files
+          # with the machine ANSI code page.
+          $cs = Join-Path $env:RUNNER_TEMP 'launcher.cs'
+          $t = Get-Content -Raw -Path 'tool/win_single/launcher.cs'
+          $t2 = $t.Replace('const string Version = "0.8.36";', 'const string Version = "' + $ver + '";')
+          # assert on the result, not on "did the text change": once the default literal
+          # in launcher.cs equals the version being built, Replace is a no-op and a
+          # before/after comparison would fail a perfectly good build
+          if (-not $t2.Contains('const string Version = "' + $ver + '";')) {
+            throw "launcher.cs patched for nothing: no Version line for $ver"
+          }
+          Set-Content -Path $cs -Value $t2 -Encoding ascii -NoNewline
+
+          $csc = Join-Path $env:windir 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+          if (-not (Test-Path $csc)) { throw "csc.exe missing: $csc" }
+          $launcher = Join-Path $env:RUNNER_TEMP 'launcher.exe'
+          # args as an array + splat: a backtick continuation inside YAML dies on one
+          # stray trailing space, and the error looks like a compiler problem
+          $cscArgs = @(
+            '-nologo',
+            '-target:winexe',
+            "-win32icon:$ico",
+            "-out:$launcher",
+            '-r:System.IO.Compression.dll',
+            '-r:System.IO.Compression.FileSystem.dll',
+            '-r:System.Drawing.dll',
+            $cs
+          )
+          & $csc @cscArgs
+          if (-not (Test-Path $launcher)) { throw 'csc produced no launcher' }
+          "launcher: $((Get-Item $launcher).Length) bytes"
+
+          $single = "dist/songbox-$ver-windows-x64-single.exe"
+          if (Test-Path $single) { Remove-Item $single -Force }
+          $out = [System.IO.File]::Open($single, 'Create', 'ReadWrite')
+          $fin = [System.IO.File]::OpenRead($launcher); $fin.CopyTo($out); $fin.Close()
+          $launcherLen = $out.Position
+          $zin = [System.IO.File]::OpenRead($zip); $zin.CopyTo($out); $zin.Close()
+          $out.Close()
+
+          # Verify the tail with the launcher's own algorithm: the blob start must equal
+          # the launcher length exactly. Off by one byte and what she double-clicks is an
+          # exe that unpacks nothing.
+          $fs = [System.IO.File]::OpenRead($single)
+          $size = $fs.Length
+          $take = [Math]::Min(65536, $size)
+          $buf = New-Object byte[] $take
+          $fs.Seek($size - $take, [System.IO.SeekOrigin]::Begin) | Out-Null
+          $fs.Read($buf, 0, $take) | Out-Null
+          $eocd = -1
+          for ($i = $take - 22; $i -ge 0; $i--) {
+            if ($buf[$i] -eq 0x50 -and $buf[$i+1] -eq 0x4B -and $buf[$i+2] -eq 0x05 -and $buf[$i+3] -eq 0x06) { $eocd = $i; break }
+          }
+          $fs.Close()
+          if ($eocd -lt 0) { throw 'no zip EOCD at the tail' }
+          $cdSize = [BitConverter]::ToUInt32($buf, $eocd + 12)
+          $cdOff = [BitConverter]::ToUInt32($buf, $eocd + 16)
+          $blobStart = ($size - $take) + $eocd - $cdSize - $cdOff
+          if ($blobStart -ne $launcherLen) {
+            throw "tail mismatch: blob starts at $blobStart but launcher is $launcherLen bytes"
+          }
+          "single: $([math]::Round((Get-Item $single).Length/1MB,1))MB (launcher $launcherLen + zip $((Get-Item $zip).Length))"
+
       - name: 上传免安装产物
         uses: actions/upload-artifact@v4
         with:
           name: songbox-windows-x64-portable
           path: dist/songbox-*-windows-x64-portable.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 上传单文件产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: songbox-windows-x64-single
+          path: dist/songbox-*-windows-x64-single.exe
           if-no-files-found: error
           retention-days: 14
