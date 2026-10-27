@@ -35,20 +35,32 @@ using System.IO;
 using System.IO.Compression;
 using System.Windows.Forms;
 
+// What Explorer and 属性→详细信息 show for this file. Without them the deliverable is a
+// nameless 20MB blob: hover says nothing, the version tab says 0.0.0.0, and task manager
+// has no description to put next to the process. AssemblyVersion is not a version we
+// bind against (nothing references this assembly), so reusing Version is safe.
+[assembly: System.Reflection.AssemblyTitle(Launcher.AppName)]
+[assembly: System.Reflection.AssemblyProduct(Launcher.AppName)]
+[assembly: System.Reflection.AssemblyDescription(Launcher.AppName)]
+[assembly: System.Reflection.AssemblyVersion(Launcher.Version)]
+[assembly: System.Reflection.AssemblyFileVersion(Launcher.Version)]
+
 static class Launcher
 {
     const string AppExe = "lyric_music.exe";
     const string StampFile = "songbox-version.txt";
 
     // 听歌小窝
-    const string AppName = "\u542c\u6b4c\u5c0f\u7a9d";
+    public const string AppName = "\u542c\u6b4c\u5c0f\u7a9d";
 
     // 正在准备程序文件
     const string Preparing = "\u6b63\u5728\u51c6\u5907\u7a0b\u5e8f\u6587\u4ef6";
 
     // Built by the workflow: the version line of pubspec.yaml is patched into this
-    // literal before compiling, so the payload and the stamp can never disagree.
-    const string Version = "0.8.36";
+    // literal before compiling, so the payload and the stamp can never disagree. Public
+    // because the assembly attributes above read it; the workflow patches the text after
+    // "const string Version", which still matches with the modifier in front.
+    public const string Version = "0.8.36";
 
     static string _status = "idle";
     static string _logPath = null;
