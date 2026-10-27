@@ -357,7 +357,7 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
           ],
         ),
         bottom: PreferredSize(
-          preferredSize: Size.fromHeight(_source == 'wy' ? 80 : 42),
+          preferredSize: Size.fromHeight(_source == 'wy' ? 80 : 66),
           child: Column(
             children: [
               Padding(
@@ -393,6 +393,14 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
                   labelColor: AppTheme.primary,
                   unselectedLabelColor: AppTheme.textSecondary,
                   labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                )
+              else
+                // 切到 QQ、酷我时那四栏会整个消失，原来一声不吭：她想找歌手时
+                // 会以为是这一版把功能弄没了，而不是这两家本来就只给歌。
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text('QQ、酷我这边只能搜到歌 · 找歌手 / 专辑 / 歌单请切回网易云',
+                      style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                 ),
             ],
           ),
@@ -420,22 +428,44 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
     }
     switch (_kind) {
       case 1:
-        return _list<ArtistInfo>(_current, _artistTile);
+        return _refresh(_list<ArtistInfo>(_current, _artistTile));
       case 2:
-        return _list<AlbumInfo>(_current, _albumTile);
+        return _refresh(_list<AlbumInfo>(_current, _albumTile));
       case 3:
-        return _list<SheetInfo>(_current, _sheetTile);
+        return _refresh(_list<SheetInfo>(_current, _sheetTile));
       default:
-        return _list<Song>(_current, _songTile);
+        return _refresh(_list<Song>(_current, _songTile));
     }
   }
 
+  /// 下拉只重刷当前这一栏：别的栏已经搜出来的东西不该被这一次下拉清掉。
+  ///
+  /// 词没变但这一栏少了一页、或者歌单核对那次刚好赶上接口抽风，原来只能把整个
+  /// 词重打一遍 —— 顶栏那颗放大镜在转圈时还是灰的。
+  Future<void> _refreshTab() async {
+    final tab = _current;
+    tab.reset();
+    await _run(tab: tab);
+  }
+
+  Widget _refresh(Widget child) => RefreshIndicator(
+        onRefresh: _refreshTab,
+        child: child,
+      );
+
   Widget _list<T>(_Tab tab, Widget Function(BuildContext, T) tile) {
     if (tab.loading && tab.items.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 140),
+          Center(child: CircularProgressIndicator()),
+        ],
+      );
     }
     if (tab.error != null && tab.items.isEmpty) {
       return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
         children: [
           EmptyState(message: '${tab.error}', icon: Icons.cloud_off, actionText: '重试', onAction: _search),
         ],
@@ -443,6 +473,7 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
     }
     if (tab.items.isEmpty) {
       return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
         children: [
           EmptyState(
               message: tab.alternatives.isEmpty
@@ -473,6 +504,8 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
     final head = tab.note == null ? 0 : 1;
     return ListView.separated(
       controller: tab.scroll,
+      // 首屏只有几行时列表根本不滚，下拉手势也就够不着；强行给一条可滚的物理。
+      physics: const AlwaysScrollableScrollPhysics(),
       itemCount: tab.items.length + 1 + head,
       separatorBuilder: (_, _) => Divider(height: 1, color: AppTheme.divider),
       itemBuilder: (context, i) {
@@ -511,10 +544,17 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
       );
     }
     if (tab.canLoadMore) {
+      // 一屏装得下的搜索结果永远滑不到「离底 300」那条触发线，页脚就停在
+      // 一句「继续下滑」上，看着像提示、其实点不动。给一颗真的能按的键。
       return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
-        child: Text('继续下滑加载第 ${tab.page + 1} 页',
-            textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+        child: Center(
+          child: TextButton.icon(
+            onPressed: () => _run(tab: tab, loadMore: true),
+            icon: const Icon(Icons.expand_more, size: 18),
+            label: Text('接着加载第 ${tab.page + 1} 页', style: const TextStyle(fontSize: 12)),
+          ),
+        ),
       );
     }
     if (tab.checked > 0) {
@@ -713,12 +753,12 @@ class _HistoryList extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final kw in history)
+              for (var i = 0; i < history.length; i++)
                 InputChip(
-                  label: Text(kw, style: const TextStyle(fontSize: 13)),
+                  label: Text(history[i], style: const TextStyle(fontSize: 13)),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  onPressed: () => onPick(kw),
-                  onDeleted: () => AppSettings.instance.forgetSearch(kw),
+                  onPressed: () => onPick(history[i]),
+                  onDeleted: () => _forgetOne(context, history, i),
                   deleteIcon: const Icon(Icons.close, size: 14),
                 ),
             ],
@@ -750,9 +790,22 @@ class _HistoryList extends StatelessWidget {
             ),
           const SizedBox(height: 10),
         ],
-        Text('提示：点历史词直接搜索，长按小叉单独删除',
+        Text('提示：点历史词直接搜索，点它右边那个小叉删掉这一个',
             style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       ],
     );
+  }
+
+  /// 删掉一个历史词，并把「放回原位」的按钮直接放在提示条上。
+  ///
+  /// 这些词是她一次次搜出来的，一没留神点掉找不回来最恼人；原来那句提示写的
+  /// 「长按小叉单独删除」更是根本没有的手势。
+  void _forgetOne(BuildContext context, List<String> history, int i) {
+    if (i < 0 || i >= history.length) return;
+    final kw = history[i];
+    AppSettings.instance.forgetSearch(kw);
+    if (!context.mounted) return;
+    toast(context, '已删掉「$kw」',
+        actionLabel: '撤销', onAction: () => AppSettings.instance.restoreSearch(kw, i));
   }
 }

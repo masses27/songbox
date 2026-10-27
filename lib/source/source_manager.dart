@@ -5,7 +5,9 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import '../engine/lx_engine.dart';
 import '../library/library_store.dart';
+import '../util/app_log.dart';
 import '../util/app_paths.dart';
+import '../util/boot_failures.dart';
 import '../util/json_file.dart';
 
 class SourceMeta {
@@ -121,12 +123,33 @@ class SourceManager {
   SourceManager._();
 
   Future<void> init() async {
-    _dir = await AppPaths.sub('sources');
+    try {
+      final d = await AppPaths.sub('sources');
+      _dir = d;
+      _dirOk = true;
+    } catch (e) {
+      BootFailures.add('音源目录没打开（这次启用/导入的音源存不住）');
+      AppLog.add('存', '音源目录没打开：$e');
+      return;
+    }
     if (_indexFile.existsSync()) {
       final arr = JsonFile.read(_indexFile);
       if (arr is List) {
+        final parsed = <SourceMeta>[];
+        var bad = 0;
+        // 一条读坏的元信息不该把整份索引带崩：原来这里整表 `map`，抛出去之后
+        // `list.clear()` 已经跑过，内存里是空的，接着就走「重新播种」那一路 ——
+        // 她自己导入的那几个音源就这么没了。
+        for (final e in arr) {
+          try {
+            if (e is Map) parsed.add(SourceMeta.fromJson(Map<String, dynamic>.from(e)));
+          } catch (_) {
+            bad++;
+          }
+        }
+        if (bad > 0) AppLog.add('存', '音源索引有 $bad 行读不出来，其余 ${parsed.length} 行照常可用');
         list.clear();
-        list.addAll(arr.map((e) => SourceMeta.fromJson(Map<String, dynamic>.from(e))));
+        list.addAll(parsed);
         activeSourceId = list.firstWhere((s) => s.enabled, orElse: () => SourceMeta(id: '', name: '')).id;
         if (activeSourceId?.isEmpty ?? true) activeSourceId = null;
       }
@@ -298,11 +321,38 @@ class SourceManager {
   }
 
   Future<void> _save() async {
-    JsonFile.write(_indexFile, list.map((e) => e.toJson()).toList());
+    _indexDirty = true;
+    _flushIndex();
+  }
+
+  bool _dirOk = false;
+
+  /// 索引到底有没有落到磁盘上。`inactive` 连下拉菜单都能触发 [flushNow]，
+  /// 原来那一下要把整份音源索引重写一遍 —— 大部分时候什么都没改过。
+  bool _indexDirty = false;
+  bool _indexSaveFailed = false;
+
+  void _flushIndex() {
+    if (!_indexDirty || !_dirOk) return;
+    final err = JsonFile.write(_indexFile, list.map((e) => e.toJson()).toList());
+    if (err == null) {
+      _indexDirty = false;
+      if (_indexSaveFailed) {
+        _indexSaveFailed = false;
+        AppLog.add('存', '音源索引重新存好了');
+      }
+      return;
+    }
+    // 留着「还没存」这个状态：下一次改动或下一次切后台都会再试一趟。
+    if (!_indexSaveFailed) {
+      _indexSaveFailed = true;
+      AppLog.add('存', '音源索引没写进磁盘，改动会保留并重试：$err');
+    }
   }
 
   /// 生命周期钩子用：启用/禁用音源后立刻落盘，别让 rename 半途被杀留下空索引。
-  void flushNow() => JsonFile.write(_indexFile, list.map((e) => e.toJson()).toList());
+  /// 真的有过改动才写（见 [_indexDirty]）。
+  void flushNow() => _flushIndex();
 
   /// 导入前的基本体检。群里转的「音源」经常其实是 json 曲库、一个网页，或者一段
   /// 完全不相干的脚本；直接收下只会多出一个永远启用不起来的条目，还不如当场拒绝。

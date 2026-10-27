@@ -9,10 +9,12 @@ import 'package:provider/provider.dart';
 import 'download/download_manager.dart';
 import 'library/library_store.dart';
 import 'ui/pages/builtin_library.dart';
+import 'ui/pages/log_page.dart';
 import 'player/player_service.dart';
 import 'settings/app_settings.dart';
 import 'source/source_manager.dart';
 import 'util/app_log.dart';
+import 'util/boot_failures.dart';
 import 'util/humanize.dart';
 import 'util/power_status.dart';
 import 'ui/pages/discover_page.dart';
@@ -48,11 +50,13 @@ Future<void> main() async {
     );
   }
   // 三个存储互不相干，并行读，冷启动少等两次磁盘。
+  // 每一块自己接住自己的失败：以前这里一个抛异常整批没人接，界面直接停在
+  // 白屏上，而她看到的「收藏是空的」背后其实根本没走到记日志那一步。
   await Future.wait([
-    AppSettings.instance.init(),
-    SourceManager.instance.init(),
-    LibraryStore.instance.init(),
-    AppLog.init(),
+    _boot('设置', () => AppSettings.instance.init()),
+    _boot('音源', () => SourceManager.instance.init()),
+    _boot('曲库', () => LibraryStore.instance.init()),
+    _boot('日志', () => AppLog.init()),
   ]);
   AppLog.add('起', '听歌小窝 v${AppSettings.appVersion} 启动');
   // 崩溃和「歌自己停了」是她最没法转述的一种现象：留下最后一根线索，比事后追问
@@ -98,6 +102,19 @@ Future<void> main() async {
       child: const LyricApp(),
     ),
   );
+}
+
+/// 冷启动里某一块存储没起来：记进日志、攒进 [BootFailures]，让主壳在第一帧后说一声。
+///
+/// 「曲库没读出来」这种话不能只留在日志里——她那边的现象是收藏空了，
+/// 而空列表看起来跟「还没收藏过」一模一样，谁也不会想到是读坏了。
+Future<void> _boot(String what, Future<void> Function() run) async {
+  try {
+    await run();
+  } catch (e) {
+    BootFailures.add('$what没读出来（这一块的记录这次是空的）');
+    AppLog.add('起', '$what初始化失败：$e');
+  }
 }
 
 class LyricApp extends StatefulWidget {
@@ -184,6 +201,20 @@ class _MainShellState extends State<MainShell> {
     PlayerService.instance.addListener(_onPlayerChanged);
     // 开屏那几秒是首屏取链和音源初始化在抢网络，体检和脚本更新排在它们后面跑。
     _startupTimer = Timer(const Duration(seconds: 8), _runStartupChecks);
+    // 冷启动哪块存储没读出来，第一帧之后一次性说一声。空列表和「读坏了」在界面上
+    // 长得一模一样，不吭声她只会以为这版把收藏弄丢了。
+    if (BootFailures.hasAny) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _showBootFailures());
+    }
+  }
+
+  void _showBootFailures() {
+    if (!mounted) return;
+    final all = BootFailures.drain();
+    if (all.isEmpty) return;
+    toast(context, all.length == 1 ? all.single : '这几样本机数据没读出来：${all.join('、')}',
+        actionLabel: '看日志',
+        onAction: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LogPage())));
   }
 
   @override
@@ -215,13 +246,25 @@ class _MainShellState extends State<MainShell> {
       final canSwap = failed != null && looksLikeVipWall(player.error);
       toast(context, player.error ?? '播放失败',
           actionLabel: canSwap ? '换版本' : '重试',
-          onAction: canSwap ? () => showOtherVersionsSheet(context, failed) : player.retry);
+          // 重试走 retryFailed：放不出之后已经自动跳了下一首，这颗键要跳回那首放不出的，
+          // 按原来的 retry 听到的是另一首歌。
+          onAction: canSwap ? () => showOtherVersionsSheet(context, failed) : player.retryFailed);
       return;
     }
     if (player.noticeTick != _seenNoticeTick) {
       _seenNoticeTick = player.noticeTick;
       if (!mounted) return;
-      toast(context, player.notice ?? '');
+      // 「中途停了」这一句后面得跟着一只手：接桥只管下拉那张卡，接不回声音，
+      // 让她干等就是什么也没发生。别的情况照旧只是报一句。
+      final stalled = player.idleStopped && player.current != null;
+      // 定时到点停了，但「再听半小时」这种时候很常见：这一条直接给一次续，
+      // 不用她再进「更多」里翻那一排分钟数。
+      final rearm = player.sleepJustEnded;
+      toast(context, player.notice ?? '',
+          actionLabel: stalled ? '接着放' : (rearm ? '再定 ${player.lastSleep.inMinutes} 分钟' : null),
+          onAction: stalled
+              ? player.retry
+              : (rearm ? player.rearmSleepTimer : null));
     }
     // 下拉菜单里那张播放卡没到系统里 —— 病因不同，去处也不同，动作直接放在提示条上，
     // 不让她自己去设置页里找。

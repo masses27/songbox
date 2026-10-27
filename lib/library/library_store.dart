@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 
 import '../models/results.dart';
 import '../models/song.dart';
+import '../util/app_log.dart';
 import '../util/app_paths.dart';
+import '../util/boot_failures.dart';
 import '../util/json_file.dart';
 import 'taste_profile.dart';
 import 'user_playlist.dart';
@@ -81,35 +83,112 @@ class LibraryStore extends ChangeNotifier {
   Timer? _autosave;
   bool _loaded = false;
 
+  /// 本机那个库目录到底有没有建起来。存储正被系统回收时它会失败，而 `late final
+  /// _root` 没赋值的话，后面每一次落盘都是 `LateInitializationError` —— 收藏点了
+  /// 变红、退出应用就没了，屏幕上从头到尾没说过为什么。
+  bool _rootOk = false;
+
   Future<void> init() async {
     if (_loaded) return;
-    _root = await AppPaths.sub('library');
-    if (!_root.existsSync()) _root.createSync(recursive: true);
-    for (final kind in LibraryKind.values) {
-      final data = JsonFile.read(_file(kind));
-      if (data is List) {
-        _by[kind] = data.map((e) => Song.fromJson(Map<String, dynamic>.from(e))).toList();
+    try {
+      final d = await AppPaths.sub('library');
+      if (!d.existsSync()) d.createSync(recursive: true);
+      _root = d;
+      _rootOk = true;
+    } catch (e) {
+      BootFailures.add('本机数据目录没打开（收藏与歌单这次存不了）');
+      AppLog.add('存', '数据目录没打开：$e');
+    }
+    if (_rootOk) {
+      for (final kind in LibraryKind.values) {
+        _by[kind] = _songsFrom(JsonFile.read(_file(kind)), kind.name);
       }
+      final j = JsonFile.read(_pathsFile);
+      if (j is Map) {
+        j.forEach((k, v) {
+          if (k is String && v is String) _localPaths[k] = v;
+        });
+      }
+      final pj = JsonFile.read(_playlistsFile);
+      if (pj is List) {
+        _playlists.addAll(pj.whereType<Map>().map((e) => UserPlaylist.fromJson(Map<String, dynamic>.from(e))));
+      }
+      final sj = JsonFile.read(_sheetsFile);
+      if (sj is List) {
+        _sheets.addAll(sj.whereType<Map>().map((e) => SheetInfo.fromJson(Map<String, dynamic>.from(e))));
+      }
+      _readVip(JsonFile.read(_vipFile));
+      _readStats(JsonFile.read(_statsFile));
+      // 0.8.35 及以前下载成功的歌只记了路径、没记进列表，「下载管理」那页一直是空的，
+      // 而路径里那个文件名本来就带着歌手、歌名、来源和 id —— 能倒回列表那一行。
+      _rebuildDownloadedList();
     }
-    final j = JsonFile.read(_pathsFile);
-    if (j is Map) {
-      j.forEach((k, v) {
-        if (k is String && v is String) _localPaths[k] = v;
-      });
-    }
-    final pj = JsonFile.read(_playlistsFile);
-    if (pj is List) {
-      _playlists.addAll(pj.whereType<Map>().map((e) => UserPlaylist.fromJson(Map<String, dynamic>.from(e))));
-    }
-    final sj = JsonFile.read(_sheetsFile);
-    if (sj is List) {
-      _sheets.addAll(sj.whereType<Map>().map((e) => SheetInfo.fromJson(Map<String, dynamic>.from(e))));
-    }
-    _readVip(JsonFile.read(_vipFile));
-    _readStats(JsonFile.read(_statsFile));
     _loaded = true;
     _favKeys = null;
     notifyListeners();
+  }
+
+  /// 一份列表 JSON 变成 Song 列表：坏一条只丢那一条。
+  ///
+  /// 原来整表 `map` 外面一个 try 都没有，一条写坏的记录就把这一整份带崩 ——
+  /// 冷启动那一趟抛出去之后她看到的是「收藏全空了」，而不只是少了一行。
+  static List<Song> _songsFrom(Object? raw, String what) {
+    if (raw is! List) return const [];
+    final out = <Song>[];
+    var bad = 0;
+    for (final e in raw) {
+      try {
+        if (e is Map) out.add(Song.fromJson(Map<String, dynamic>.from(e)));
+      } catch (_) {
+        bad++;
+      }
+    }
+    if (bad > 0) AppLog.add('存', '「$what」有 $bad 行读不出来，其余 ${out.length} 行照常可用');
+    return out;
+  }
+
+  void _rebuildDownloadedList() {
+    if (_localPaths.isEmpty) return;
+    final list = _by[LibraryKind.downloaded]!;
+    final known = {for (final s in list) keyOf(s)};
+    var added = 0;
+    _localPaths.forEach((k, path) {
+      if (known.contains(k)) return;
+      final s = songFromDownloadPath(path);
+      // 名字倒出来的键和映射里的键必须对得上：对不上宁可少一行，
+      // 也不能把一首别的歌塞进「下载管理」。
+      if (s == null || keyOf(s) != k) return;
+      list.add(s);
+      added++;
+    });
+    if (added > 0) {
+      AppLog.add('存', '按下载文件名补回 $added 首到「下载管理」');
+      _markDirty(LibraryKind.downloaded);
+    }
+  }
+
+  /// 从下载文件名倒回列表里那一行：`歌手 - 歌名_来源-id_音质.后缀`
+  /// （命名见 DownloadManager._run）。倒不出来就返回 null。
+  static Song? songFromDownloadPath(String path) {
+    final base = path.replaceAll('\\', '/');
+    final name = base.substring(base.lastIndexOf('/') + 1);
+    final dot = name.lastIndexOf('.');
+    if (dot <= 0) return null;
+    final parts = name.substring(0, dot).split('_');
+    if (parts.length < 3) return null;
+    final srcMid = parts[parts.length - 2].split('-');
+    if (srcMid.length != 2) return null;
+    final source = srcMid[0];
+    if (!const ['wy', 'kw', 'tx', 'bl', 'kg'].contains(source)) return null;
+    final head = parts.sublist(0, parts.length - 2).join('_');
+    final dash = head.indexOf(' - ');
+    if (dash < 0) return null;
+    return Song(
+      source: source,
+      songmid: srcMid[1],
+      name: head.substring(dash + 3).trim(),
+      singer: head.substring(0, dash).trim(),
+    );
   }
 
   File _file(LibraryKind kind) => File('${_root.path}/${kind.name}.json');
@@ -144,10 +223,25 @@ class LibraryStore extends ChangeNotifier {
     _localPaths[keyOf(s)] = path;
     _exists.remove(path);
     _writePaths();
-    _markDirty(LibraryKind.downloaded);
+    // 下载成功的歌要真的出现在「下载管理」里。原来这里只记路径，那份列表一直是空的：
+    // 那一页永远写着「还没有下载歌曲」，而设置页的「全部删除」照着空列表循环，
+    // 一个文件都没删掉却把路径映射清了个干净——本地能放的歌就此全变成在线。
+    markDownloaded(s);
   }
 
-  void _writePaths() => JsonFile.write(_pathsFile, _localPaths);
+  void _writePaths() {
+    _pathsDirty = true;
+    _flushPaths();
+  }
+
+  /// 路径映射单独一份文件，改动最频繁（每次下载、每次删除），攒着一个脏标记，
+  /// 这样切后台时 [flushNow] 只在真的有过改动才去写盘。
+  bool _pathsDirty = false;
+
+  void _flushPaths() {
+    if (!_pathsDirty || !_rootOk) return;
+    if (_writeJson(_pathsFile, '下载路径', _localPaths)) _pathsDirty = false;
+  }
 
 
   List<Song> list(LibraryKind kind) => List.unmodifiable(_by[kind] ?? const []);
@@ -305,12 +399,16 @@ class LibraryStore extends ChangeNotifier {
   }
 
   void _flushStats() {
-    if (!_dirtyStats) return;
-    _dirtyStats = false;
-    JsonFile.write(_statsFile, {
+    if (!_dirtyStats || !_rootOk) return;
+    if (!_writeJson(_statsFile, '听歌计数', {
       'songs': _stats.map((k, v) => MapEntry(k, v.toJson())),
       'days': _days,
-    });
+    })) {
+      // 计数是口味引擎的原料：写不进去就留着下次再试，别当成已经存好了。
+      _statsAutosave = Timer(const Duration(seconds: 20), _flushStats);
+      return;
+    }
+    _dirtyStats = false;
   }
 
   void _readStats(Object? raw) {
@@ -471,7 +569,17 @@ class LibraryStore extends ChangeNotifier {
 
   void _writePlaylists() {
     notifyListeners();
-    JsonFile.write(_playlistsFile, _playlists.map((p) => p.toJson()).toList());
+    _playlistsDirty = true;
+    _flushPlaylists();
+  }
+
+  bool _playlistsDirty = false;
+
+  void _flushPlaylists() {
+    if (!_playlistsDirty || !_rootOk) return;
+    if (_writeJson(_playlistsFile, '自建歌单', _playlists.map((p) => p.toJson()).toList())) {
+      _playlistsDirty = false;
+    }
   }
 
   // ---- 一首歌一个源：放不出的歌记住能播的那个 ------------------------------
@@ -569,11 +677,20 @@ class LibraryStore extends ChangeNotifier {
     _vipAutosave?.cancel();
     _vipAutosave = null;
     if (!_vipDirty) return;
-    _vipDirty = false;
-    JsonFile.write(_vipFile, {
+    if (!_writeJson(_vipFile, '换源记录', {
       'swaps': _swaps.map((k, v) => MapEntry(k, v.toJson())),
       'dead': _deadUntil,
-    });
+    })) {
+      // 没落盘就留着「还有改动」这个状态，20 秒后再试一班；清掉标记等于把这次
+      // 找到的免费版当成已经存好了，下次启动又得整批重找。
+      _vipAutosave = Timer(const Duration(seconds: 20), _flushVip);
+      return;
+    }
+    _vipDirty = false;
+    // 攒到这一刻才吭一声：整单体检是几十首连着记，逐首 notify 等于让所有列表
+    // 跟着重排几十遍。而列表行已经订阅了「这首有没有免费版」，所以角标最迟两秒
+    // 就改口，不用等下一次别的改动顺带把它刷出来。
+    notifyListeners();
   }
 
   void _readVip(Object? raw) {
@@ -642,7 +759,17 @@ class LibraryStore extends ChangeNotifier {
   void _writeSheets() {
     _sheetKeys = null;
     notifyListeners();
-    JsonFile.write(_sheetsFile, _sheets.map((s) => s.toJson()).toList());
+    _sheetsDirty = true;
+    _flushSheets();
+  }
+
+  bool _sheetsDirty = false;
+
+  void _flushSheets() {
+    if (!_sheetsDirty || !_rootOk) return;
+    if (_writeJson(_sheetsFile, '收藏的歌单', _sheets.map((s) => s.toJson()).toList())) {
+      _sheetsDirty = false;
+    }
   }
 
   void _markDirty(LibraryKind kind) {
@@ -656,21 +783,72 @@ class LibraryStore extends ChangeNotifier {
   void _flush() {
     _autosave?.cancel();
     _autosave = null;
+    if (!_rootOk) return;
+    var failed = false;
     for (final kind in LibraryKind.values) {
       if (_dirty[kind] != true) continue;
-      JsonFile.write(_file(kind), _by[kind]!.map((s) => s.toJson()).toList());
-      _dirty[kind] = false;
+      if (_writeJson(_file(kind), kindLabel(kind), _by[kind]!.map((s) => s.toJson()).toList())) {
+        _dirty[kind] = false;
+      } else {
+        failed = true;
+      }
     }
+    // 写不进去就别把这一轮的改动当成已经存好：20 秒后再试一班。
+    // 磁盘满这类事多半过一会儿就通了（她清出点空间），静默丢掉才是真的丢。
+    if (failed) _autosave = Timer(const Duration(seconds: 20), _flush);
   }
 
+  static String kindLabel(LibraryKind kind) => switch (kind) {
+        LibraryKind.favorites => '我的收藏',
+        LibraryKind.recent => '最近播放',
+        LibraryKind.downloaded => '下载管理',
+      };
+
+  /// 落盘的唯一出口：成功返回 true；失败把原因写进日志（同一种数据只报第一次，
+  /// 磁盘满会连着撞几十次），由调用方决定留不留「还没存」这个状态。
+  ///
+  /// 集合一变就要 notify：「我的」页那条「本机数据暂时存不进去」全靠它，
+  /// 存好了 banner 得自己消失，不能等下一次收藏才收掉。
+  bool _writeJson(File f, String what, Object value) {
+    if (!_rootOk) {
+      if (_writeFailed.add(what)) {
+        AppLog.add('存', '数据目录没打开，「$what」存不了');
+        notifyListeners();
+      }
+      return false;
+    }
+    final err = JsonFile.write(f, value);
+    if (err == null) {
+      if (_writeFailed.remove(what)) {
+        AppLog.add('存', '「$what」重新存好了');
+        notifyListeners();
+      }
+      return true;
+    }
+    if (_writeFailed.add(what)) {
+      AppLog.add('存', '「$what」没写进磁盘，改动会保留并重试：$err');
+      notifyListeners();
+    }
+    return false;
+  }
+
+  /// 界面右上角那句「本机数据存不进去」的凭据：设置页/自检页拿它解释为什么收藏
+  /// 会掉。非空就是有过没落盘的改动。
+  final Set<String> _writeFailed = {};
+  List<String> get pendingWriteFailures => List.unmodifiable(_writeFailed);
+
   /// 切后台/退出前立刻落盘：2 秒防抖窗口里的收藏与最近播放不该被系统杀进程带走。
+  ///
+  /// 只写真的有过改动的那些：`inactive` 连下拉菜单都能触发，原来这里每次都要
+  /// 把歌单和下载映射整表重写一遍再 notify 一轮，纯粹是白干的磁盘活。
   void flushNow() {
     _flush();
     _statsAutosave?.cancel();
     _flushStats();
     _vipAutosave?.cancel();
     _flushVip();
-    _writePaths();
-    _writePlaylists();
+    _flushPaths();
+    _flushPlaylists();
+    _flushSheets();
   }
 }

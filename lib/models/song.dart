@@ -184,6 +184,15 @@ String heardQuality(String wanted, String source) {
   return order.indexOf(cap) < order.indexOf(wanted) ? cap : wanted;
 }
 
+/// 档位码给人看的名字。以前只有设置页有一张对照表，别处（播放页那行「现在听到的是
+/// 哪一档」、下载确认、音源自检）就直接把「flac」念出来——她看见的是代码不是档位。
+/// 未知代码原样带出来：B 站那档是 192k，写成「高清 320k」就是骗人。
+String qualityLabel(String q) => switch (q) {
+      '128k' => '标准 128k',
+      'flac' => '无损 flac',
+      _ => '高清 $q',
+    };
+
 /// 来源码给人看的名字。这是**唯一**一份对照表：
 /// 界面（`sourceLabel`）、取链失败台账（`BuiltinLibrary._twinLabel`）、撞墙那句
 /// （`_wallHome`）都从这里念，接一个新平台只改这一处。

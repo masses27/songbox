@@ -44,7 +44,8 @@ class SourceProbe {
           return (
             label: '网易云 端内直连',
             ok: true, warn: false,
-            message: '「${pick.name}」$quality 出链成功（全程匿名，会员歌靠 B 站、酷狗整首）',
+            message: '「${pick.name}」${qualityLabel(quality)} 出链成功'
+                '（全程匿名，会员歌靠 B 站、酷狗整首）',
             raw: _tail(url),
           );
         } catch (e) {
@@ -78,9 +79,9 @@ class SourceProbe {
           return (
             label: 'QQ 端内直连',
             ok: true, warn: false,
-            message: '「${pick.name}」出链成功，实际档位 $tier'
+            message: '「${pick.name}」出链成功，实际档位 ${qualityLabel(tier)}'
                 '${fromToplist ? '（搜索没回话，这首是从榜单拿的）' : ''}'
-                '${tier == '128k' && quality != '128k' ? '（匿名拿不到 $quality，已退回 128k）' : ''}',
+                '${tier == '128k' && quality != '128k' ? '（匿名拿不到 ${qualityLabel(quality)}）' : ''}',
             raw: _tail(url),
           );
         } catch (e) {

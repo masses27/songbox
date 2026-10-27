@@ -24,6 +24,16 @@ void main() {
     expect(sourceLabel('kg'), '酷狗');
   });
 
+  test('档位码也要有给人看的名字', () {
+    // 以前只有设置页有一张对照表，播放页那行、下载确认、音源自检都直接把「flac」念出来。
+    // 合成一份之后 B 站那一档必须照实写 192k：套进「高清 320k」就是吹。
+    expect(qualityLabel('128k'), '标准 128k');
+    expect(qualityLabel('320k'), '高清 320k');
+    expect(qualityLabel('flac'), '无损 flac');
+    expect(qualityLabel('192k'), '高清 192k');
+    expect(qualityLabel(heardQuality('flac', 'bl')), '高清 192k');
+  });
+
   test('档位标注写实际听到的那一档', () {
     // 换源/匿名兜底的那几条各有上限（B 站 192k、QQ 128k、酷狗 128k），永远到不了无损。
     // 播放页和下载弹窗都写设置值的话，「无损 flac · 免费版」挂在耳朵是 192k 那儿。

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -11,6 +13,7 @@ import '../player/player_bar.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'eq_page.dart';
+import 'log_page.dart';
 import 'settings_page.dart';
 import 'sheet_detail_page.dart';
 import 'sources_page.dart';
@@ -92,6 +95,7 @@ class _LibraryPageState extends State<LibraryPage> implements ScrollToTop {
           onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage())),
         ),
         const _DownloadingSection(),
+        const _WriteFailuresBanner(),
         Divider(height: 24, color: AppTheme.divider),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
@@ -317,19 +321,45 @@ class _Section extends StatefulWidget {
 class _SectionState extends State<_Section> {
   bool _expanded = false;
 
+  /// 已下载歌曲占了多大地方：-1 = 还没量到。这首栏每次页面打开只扫一次盘。
+  int _bytes = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.kind == LibraryKind.downloaded) unawaited(_measure());
+  }
+
+  Future<void> _measure() async {
+    final n = await DownloadManager.musicDirBytes();
+    if (mounted) setState(() => _bytes = n);
+  }
+
   Widget _songRow(LibraryStore store, List<Song> list, Song s) => SongListRow(
         song: s,
         siblings: list,
         extraTrailing: _RemoveButton(kind: widget.kind, song: s),
       );
 
-  /// 最近播放顺手答一句「这周听了多少」：列表长度只是她攒了多少，
-  /// 而这一句才是她在用这个 App。
+  /// 这一列到底是歌还是日期：收藏和下载只数首数，最近播放顺手答一句「这周听了多少」。
+  ///
+  /// 下载那一栏还要报占了多大存储：她决定「要不要再下一首无损」时看的是磁盘还剩多少，
+  /// 只给首数等于让她自己去设置页翻清除缓存那一条。
   String _subtitle(LibraryStore store, List<Song> list) {
     if (list.isEmpty) return widget.empty;
+    if (widget.kind == LibraryKind.downloaded) {
+      final size = _bytes > 0 ? ' · 占 ${_fmtBytes(_bytes)}' : '';
+      return '共 ${list.length} 首$size';
+    }
     if (widget.kind != LibraryKind.recent) return '共 ${list.length} 首';
     final week = store.playsInLastDays(7);
     return week > 0 ? '共 ${list.length} 首 · 这周播了 $week 次' : '共 ${list.length} 首';
+  }
+
+  static String _fmtBytes(int bytes) {
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / 1048576).toStringAsFixed(1)} MB';
+    return '${(bytes / 1073741824).toStringAsFixed(2)} GB';
   }
 
   @override
@@ -344,7 +374,11 @@ class _SectionState extends State<_Section> {
         child: ExpansionTile(
           tilePadding: const EdgeInsets.symmetric(horizontal: 12),
           initiallyExpanded: _expanded,
-          onExpansionChanged: (v) => setState(() => _expanded = v),
+          onExpansionChanged: (v) {
+            // 每次展开都重量一次：这一栏下面是「下载」，刚下完一首再看占用才对得上。
+            if (v && widget.kind == LibraryKind.downloaded) unawaited(_measure());
+            setState(() => _expanded = v);
+          },
           leading: CircleAvatar(
             backgroundColor: AppTheme.iconTint,
             child: Icon(widget.icon, color: AppTheme.primary, size: 22),
@@ -355,24 +389,34 @@ class _SectionState extends State<_Section> {
           children: list.isEmpty
               ? const [SizedBox(height: 4)]
               : [
-                  // 一首一首 × 点掉太累，最近播放本来就没有留档价值。
-                  if (widget.kind == LibraryKind.recent)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed: () {
-                            final gone = store.clear(LibraryKind.recent);
-                            toast(context, '已清空最近播放',
-                                actionLabel: '撤销',
-                                onAction: () => store.restore(LibraryKind.recent, gone));
-                          },
-                          icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                          label: const Text('清空最近播放', style: TextStyle(fontSize: 12)),
+                  // 展开之后先给两只手：整列一次播出去，和整列一次清掉。
+                  // 原来只有「最近播放」有清空，收藏攒到几百首时只能一首一首点 ×。
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                    child: Row(
+                      children: [
+                        TextButton.icon(
+                          onPressed: () => context.read<PlayerService>().playList(list, 0),
+                          icon: const Icon(Icons.play_arrow, size: 18),
+                          label: Text('播放全部 ${list.length} 首', style: const TextStyle(fontSize: 12)),
                         ),
-                      ),
+                        const Spacer(),
+                        // 下载那一栏不给「清空」：清掉记录不等于删掉文件，
+                        // 只会让那首歌还在磁盘上、却再也没有一个列表认它。
+                        if (widget.kind != LibraryKind.downloaded)
+                          TextButton.icon(
+                            onPressed: () {
+                              final gone = store.clear(widget.kind);
+                              toast(context, '已清空${widget.title}',
+                                  actionLabel: '撤销',
+                                  onAction: () => store.restore(widget.kind, gone));
+                            },
+                            icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+                            label: const Text('清空', style: TextStyle(fontSize: 12)),
+                          ),
+                      ],
                     ),
+                  ),
                   // 只有最近播放按天分段：另两列本来就是「攒着」，不按时间读。
                   if (widget.kind == LibraryKind.recent)
                     for (final it in _historyItems(store, list, limit: 50))
@@ -416,9 +460,12 @@ class _RemoveButton extends StatelessWidget {
               title: '删除本地文件',
               message: '删除后这首歌会回到在线播放，想再离线听需要重新下载。');
           if (!ok || !context.mounted) return;
-          await context.read<DownloadManager>().deleteDownload(song);
+          final done = await context.read<DownloadManager>().deleteDownload(song);
           if (!context.mounted) return;
-          toast(context, '已删除「${song.name}」的本地文件');
+          // 没删掉就不说「已删除」：文件还占着存储，而列表里那一行已经没了的话，
+          // 她既找不到它也清不掉它，只能等「全部删除」按磁盘扫一遍。
+          toast(context,
+              done ? '已删除「${song.name}」的本地文件' : '这个文件正被占用，没删掉；列表里先给你留着');
           return;
         }
         final store = context.read<LibraryStore>();
@@ -480,10 +527,44 @@ class _DownloadingSection extends StatelessWidget {
   }
 }
 
+/// 收藏点了没红、下次开机又不见了 —— 根子是这台机的数据没写进磁盘。
+/// 原来只有日志里有这一行，她根本不会去翻；这一条把它搬到「我的」最显眼的地方，
+/// 当场给一颗「再存一次」，点整条进日志看具体原因（磁盘满、目录没打开是两回事）。
+class _WriteFailuresBanner extends StatelessWidget {
+  const _WriteFailuresBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final failed = context.select<LibraryStore, String>((s) => s.pendingWriteFailures.join('、'));
+    if (failed.isEmpty) return const SizedBox.shrink();
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      shape: RoundedRectangleBorder(borderRadius: AppTheme.cardBorder),
+      color: AppTheme.cardBg,
+      child: ListTile(
+        dense: true,
+        leading: const Icon(Icons.save_as_outlined, color: AppTheme.primary),
+        title: const Text('本机数据暂时存不进去', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        subtitle: Text('$failed 还留在内存里没落到磁盘上，这期间重启会丢这一笔。点这条看原因，或先手动存一次',
+            style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary, height: 1.4)),
+        trailing: TextButton(
+          onPressed: () {
+            LibraryStore.instance.flushNow();
+            final left = LibraryStore.instance.pendingWriteFailures;
+            if (!context.mounted) return;
+            toast(context, left.isEmpty ? '存好了' : '还是没存进去：${left.join('、')}');
+          },
+          child: const Text('再存一次', style: TextStyle(fontSize: 12)),
+        ),
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LogPage())),
+      ),
+    );
+  }
+}
+
 class _ProgressBar extends StatelessWidget {
   final DownloadTask task;
   const _ProgressBar({required this.task});
-
   @override
   Widget build(BuildContext context) {
     final p = task.progress;

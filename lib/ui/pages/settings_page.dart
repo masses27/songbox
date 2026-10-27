@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../download/download_manager.dart';
 import '../../library/library_store.dart';
+import '../../models/song.dart';
 import '../../player/audio_prefetch.dart';
 import '../../player/player_service.dart';
 import '../../settings/app_settings.dart';
@@ -21,8 +22,10 @@ class SettingsPage extends StatelessWidget {
 
   Future<void> _clearCache(BuildContext context) async {
     final dm = context.read<DownloadManager>();
-    // 预取下来还没播到的歌也算缓存，一起清掉。
-    final bytes = await DownloadManager.deleteImageCache() + await AudioPrefetch.instance.clearAll();
+    // 先量、再问、最后才删。原来第一步就是 deleteImageCache()：缓存早在她看到
+    // 那句「只清缓存 / 全部删除」之前就没掉了，那个选择从来不算数。
+    final bytes =
+        await DownloadManager.imageCacheBytes() + await AudioPrefetch.instance.pendingBytes();
     final musicBytes = await DownloadManager.musicDirBytes();
     if (!context.mounted) return;
     final doMusic = await showDialog<bool>(
@@ -32,26 +35,35 @@ class SettingsPage extends StatelessWidget {
         content: Text('图片与预取歌曲缓存 ${_fmt(bytes)}\n已下载音乐 ${_fmt(musicBytes)}\n\n'
             '${musicBytes == 0 ? '暂时还没有下载文件。' : '是否连同已下载的音乐一起删除？'}'),
         actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('先不清')),
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('只清缓存')),
           if (musicBytes > 0)
             TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('全部删除')),
         ],
       ),
     );
-    if (doMusic == true) await dm.deleteAllDownloads();
+    // 「先不清」和按返回键都算她反悔：这一次一个文件都不动。
+    if (doMusic == null) return;
+    // 预取下来还没播到的歌也算缓存，一起清掉。
+    final freedCache =
+        await DownloadManager.deleteImageCache() + await AudioPrefetch.instance.clearAll();
+    if (doMusic == false) {
+      if (!context.mounted) return;
+      toast(context, '已清出 ${_fmt(freedCache)}（歌曲收藏与音源设置保留）');
+      return;
+    }
+    // 删完再报数：以「删之前量到的占用」当「清出来的体积」，遇到一首删不掉就是纯骗人。
+    final freedMusic = await dm.deleteAllDownloads();
     if (!context.mounted) return;
-    // 报一个真实清出来的体积，比「已清理」三个字有用：她能确认手机存储确实松动了。
-    final freed = bytes + (doMusic == true ? musicBytes : 0);
-    toast(
-      context,
-      '已清出 ${_fmt(freed)}${doMusic == true ? '' : '（歌曲收藏与音源设置保留）'}',
-    );
+    toast(context, '已清出 ${_fmt(freedCache + freedMusic)}');
   }
 
   static String _fmt(int bytes) {
     if (bytes <= 0) return '0 KB';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+    // 无损攒到几个 G 是常事，写成「2560.0 MB」不如 2.5 GB 一眼读得出来。
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / 1048576).toStringAsFixed(1)} MB';
+    return '${(bytes / 1073741824).toStringAsFixed(2)} GB';
   }
 
   @override
@@ -82,7 +94,7 @@ class SettingsPage extends StatelessWidget {
                 for (final q in AppSettings.qualities)
                   RadioListTile<String>(
                     value: q,
-                    title: Text(_qualityName(q)),
+                    title: Text(qualityLabel(q)),
                     subtitle: Text(_qualityHint(q),
                         style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                     activeColor: AppTheme.primary,
@@ -226,12 +238,6 @@ class SettingsPage extends StatelessWidget {
       ),
     );
   }
-
-  String _qualityName(String q) => switch (q) {
-        '128k' => '标准 128k',
-        'flac' => '无损 flac',
-        _ => '高清 320k',
-      };
 
   String _qualityHint(String q) => switch (q) {
         '128k' => '最省流量，任何曲库都能放',

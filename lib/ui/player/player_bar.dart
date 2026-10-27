@@ -58,10 +58,15 @@ class _PlayerBarState extends State<PlayerBar> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 14),
                   ),
-                  subtitle: Text(song.singer,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11)),
+                  subtitle: Text(
+                    // 等重连这一句要常驻：提示条两秒就收，而那后面可能是 15 秒、30 秒。
+                    player.waitNote ?? song.singer,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: player.waitNote == null ? null : AppTheme.primary),
+                  ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -206,7 +211,10 @@ class _ScrubBar extends StatelessWidget {
     return StreamBuilder<Duration>(
       stream: player.positionStream,
       builder: (context, s) {
-        final totalMs = player.duration?.inMilliseconds ?? 0;
+        // 长度先认播放器、再认曲库里那份 interval（见 PlayerService.total）。在线流开头
+        // 几秒不报 duration，那时候整条进度线只能退化成一根转圈的模糊线：拖不动，
+        // 也看不出这首歌还剩多久。
+        final totalMs = player.total?.inMilliseconds ?? 0;
         if (totalMs <= 0) {
           return SizedBox(
             height: 2,
@@ -217,9 +225,15 @@ class _ScrubBar extends StatelessWidget {
             ),
           );
         }
-        final value = (scrub ?? s.data?.inMilliseconds ?? 0).clamp(0, totalMs).toDouble();
+        // 手指压着的时候认手指，刚松手那一截认 seekHold，其余才是播放器报的位置。
+        // 少了中间那一项，seek 落地之前进度头会先弹回原来的地方再跳过去 —— 像没拖准。
+        final value = (scrub ?? player.seekHold?.inMilliseconds ?? s.data?.inMilliseconds ?? 0)
+            .clamp(0, totalMs)
+            .toDouble();
         return SizedBox(
-          height: 16,
+          // 轨道只有 2px，能按到的却是这一整条的高度：16 的时候得瞄着点，
+          // 24 才勉强是「手指随便一压就中」。
+          height: 24,
           child: SliderTheme(
             data: SliderThemeData(
               trackHeight: 2,

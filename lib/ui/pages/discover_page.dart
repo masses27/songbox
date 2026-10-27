@@ -127,8 +127,20 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop {
           if (_error != null)
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text('榜单加载失败：$_error', style: const TextStyle(color: AppTheme.primary, fontSize: 12)),
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                child: Row(
+                  children: [
+                    // 就地给一颗重试：这句错误光是写在那里，她能做的只有把整页下拉一遍，
+                    // 而那一下把分类歌单也一起重取。
+                    Expanded(
+                      child: Text('榜单加载失败：$_error',
+                          style: const TextStyle(color: AppTheme.primary, fontSize: 12)),
+                    ),
+                    TextButton(
+                        onPressed: _load,
+                        child: const Text('重试', style: TextStyle(fontSize: 13))),
+                  ],
+                ),
               ),
             ),
           if (_loading && _ranks.isEmpty)

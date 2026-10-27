@@ -10,7 +10,13 @@ import 'dart:io';
 class JsonFile {
   JsonFile._();
 
-  static void write(File f, Object value) {
+  /// 写成功返回 null，失败返回一句原因。
+  ///
+  /// 原来这里 `catch (_) {}` 一吞到底：磁盘满、目录被外部清掉、存储正被回收，
+  /// 调用方拿到的都是「写完了」，于是收藏页面上的心照样变红、脏标记照样清掉，
+  /// 下一次启动她发现自己收藏的歌少了一半，而屏幕上从来没有说过为什么。
+  /// 现在把失败递出去，让调用方留着「还没落盘」这个状态等下次重试。
+  static String? write(File f, Object value) {
     final tmp = File('${f.path}.tmp');
     try {
       tmp.parent.createSync(recursive: true);
@@ -21,10 +27,12 @@ class JsonFile {
         } catch (_) {}
       }
       tmp.renameSync(f.path);
-    } catch (_) {
+      return null;
+    } catch (e) {
       try {
         if (tmp.existsSync()) tmp.deleteSync();
       } catch (_) {}
+      return '$e';
     }
   }
 

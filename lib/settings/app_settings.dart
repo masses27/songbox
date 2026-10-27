@@ -3,7 +3,9 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../util/app_log.dart';
 import '../util/app_paths.dart';
+import '../util/boot_failures.dart';
 import '../util/json_file.dart';
 
 /// User preferences that must survive restarts: playback quality and search
@@ -17,7 +19,7 @@ class AppSettings extends ChangeNotifier {
 
   /// 和 pubspec.yaml 同步；build.sh 每次打包前按 pubspec 改写这一行，
   /// 「关于」上写错版本号会把她截图里的版本带偏，而排查全靠那句版本。
-  static const appVersion = '0.8.35';
+  static const appVersion = '0.8.36';
 
   String quality = '320k';
   final List<String> searchHistory = [];
@@ -47,6 +49,10 @@ class AppSettings extends ChangeNotifier {
   /// 所以第一首接上音源后要照这个名字补一次。'关闭' 表示不用均衡器。
   String eqPreset = '关闭';
 
+  /// 循环模式，跨启动保持（'list' / 'single' / 'random' / 'none'）。
+  /// 睡前设成单曲循环、第二天重启又变回列表循环，是这一层原来缺的那格。
+  String playMode = 'list';
+
   /// QQ 音乐的设备号：第一次取链时生成，之后一直用这一个。
   /// 所有客户端都报同一个号，正是风控最爱归并的特征。
   String txGuid = '';
@@ -54,28 +60,51 @@ class AppSettings extends ChangeNotifier {
   late final File _file;
   bool _loaded = false;
 
+  /// 设置文件到底有没有打开。`_file` 是 `late final`，没赋值就存设置会当场炸，
+  /// 而冷启动那一头 `AppPaths.root()` 失败过一次的话（存储正被系统回收），
+  /// 原来整个 init 抛出去、外面没人接 —— 应用直接起不来。
+  bool _fileOk = false;
   Future<void> init() async {
     if (_loaded) return;
     _loaded = true;
-    final d = await AppPaths.root();
-    _file = File('${d.path}/settings.json');
-    final j = JsonFile.read(_file);
-    if (j is Map) {
-      if (j['quality'] is String && qualities.contains(j['quality'])) {
-        quality = j['quality'] as String;
-      }
-      final h = j['searchHistory'];
-      if (h is List) searchHistory.addAll(h.whereType<String>());
-      autoSkipFailed = j['autoSkipFailed'] != false;
-      vipAutoScan = j['vipAutoScan'] != false;
-      confirmBeforeDownload = j['confirmBeforeDownload'] == true;
-      preloadNext = j['preloadNext'] != false;
-      if (j['theme'] is String && themeValues.contains(j['theme'])) theme = j['theme'] as String;
-      final sp = (j['playbackSpeed'] as num?)?.toDouble();
-      if (sp != null && sp >= 0.5 && sp <= 3) playbackSpeed = sp;
-      if (j['eqPreset'] is String) eqPreset = j['eqPreset'] as String;
-      if (j['txGuid'] is String) txGuid = j['txGuid'] as String;
+    try {
+      final d = await AppPaths.root();
+      _file = File('${d.path}/settings.json');
+      _fileOk = true;
+    } catch (e) {
+      BootFailures.add('设置文件没打开（音质、循环模式这类改动这次存不了）');
+      AppLog.add('存', '设置文件没打开：$e');
+      return;
     }
+    try {
+      final j = JsonFile.read(_file);
+      if (j is Map) {
+        _apply(j);
+      }
+    } catch (e) {
+      BootFailures.add('设置读不出来，已按默认值启动');
+      AppLog.add('存', 'settings.json 读失败：$e');
+    }
+  }
+
+  void _apply(Map<dynamic, dynamic> j) {
+    if (j['quality'] is String && qualities.contains(j['quality'])) {
+      quality = j['quality'] as String;
+    }
+    final h = j['searchHistory'];
+    if (h is List) searchHistory.addAll(h.whereType<String>());
+    autoSkipFailed = j['autoSkipFailed'] != false;
+    vipAutoScan = j['vipAutoScan'] != false;
+    confirmBeforeDownload = j['confirmBeforeDownload'] == true;
+    preloadNext = j['preloadNext'] != false;
+    if (j['theme'] is String && themeValues.contains(j['theme'])) theme = j['theme'] as String;
+    final sp = (j['playbackSpeed'] as num?)?.toDouble();
+    if (sp != null && sp >= 0.5 && sp <= 3) playbackSpeed = sp;
+    if (j['eqPreset'] is String) eqPreset = j['eqPreset'] as String;
+    if (j['txGuid'] is String) txGuid = j['txGuid'] as String;
+    // 循环模式：'list' / 'single' / 'random' / 'none'。写成字符串是为了这个文件
+    // 不依赖 material，取值对不对由播放那边按名字认，认不出就回到列表循环。
+    if (j['playMode'] is String) playMode = j['playMode'] as String;
   }
 
   void setQuality(String q) {
@@ -126,6 +155,12 @@ class AppSettings extends ChangeNotifier {
     _save();
   }
 
+  void setPlayMode(String v) {
+    if (v == playMode) return;
+    playMode = v;
+    _save();
+  }
+
   /// 取 QQ 设备号，没有就现生成一个存下来。腾讯只要求它是个 10 位数字串。
   ///
   /// 分两段拼，不是随手 `nextInt(9000000000)`：`Random.nextInt` 的上限是 2^32，
@@ -166,6 +201,14 @@ class AppSettings extends ChangeNotifier {
     if (searchHistory.remove(keyword)) _save();
   }
 
+  /// 撤销一次「删掉一个历史词」：放回她原来那个位置。
+  /// 只删一个词是常事，而攒这些词靠的是她一次次搜出来的，不该一没留神就没了。
+  void restoreSearch(String keyword, int index) {
+    if (keyword.isEmpty || searchHistory.contains(keyword)) return;
+    searchHistory.insert(index.clamp(0, searchHistory.length), keyword);
+    _save();
+  }
+
   void clearSearchHistory() {
     if (searchHistory.isEmpty) return;
     searchHistory.clear();
@@ -181,9 +224,12 @@ class AppSettings extends ChangeNotifier {
     _save();
   }
 
+  bool _saveFailed = false;
+
   void _save() {
     notifyListeners();
-    JsonFile.write(_file, {
+    if (!_fileOk) return;
+    final err = JsonFile.write(_file, {
       'quality': quality,
       'searchHistory': searchHistory,
       'autoSkipFailed': autoSkipFailed,
@@ -193,7 +239,18 @@ class AppSettings extends ChangeNotifier {
       'theme': theme,
       'playbackSpeed': playbackSpeed,
       'eqPreset': eqPreset,
+      'playMode': playMode,
       'txGuid': txGuid,
     });
+    // 每次改设置都是整份重写，所以这里不用自己排重试：下一次改动就是把这一次
+    // 补回去的那一趟。但第一次失败必须留一行日志，不然「设了没存住」这件事
+    // 从头到尾只有她一个人知道。
+    if (err != null && !_saveFailed) {
+      _saveFailed = true;
+      AppLog.add('存', '设置没写进磁盘，之后的改动会接着重试：$err');
+    } else if (err == null && _saveFailed) {
+      _saveFailed = false;
+      AppLog.add('存', '设置重新存好了');
+    }
   }
 }

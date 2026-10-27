@@ -132,6 +132,20 @@ class AudioPrefetch {
     return bytes;
   }
 
+  /// 只量不删：先让她看清要清掉多少，再决定清不清。
+  Future<int> pendingBytes() async {
+    final dir = await _dirOf();
+    if (!dir.existsSync()) return 0;
+    var bytes = 0;
+    await for (final e in dir.list()) {
+      if (e is! File) continue;
+      try {
+        bytes += await e.length();
+      } catch (_) {}
+    }
+    return bytes;
+  }
+
   Future<Directory> _dirOf() async {
     final d = _dir;
     if (d != null) return d;

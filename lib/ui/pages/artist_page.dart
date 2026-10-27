@@ -149,9 +149,13 @@ class _ArtistPageState extends State<ArtistPage> {
       body: RefreshIndicator(
         onRefresh: () => _load(refresh: true),
         child: _loading && artist == null
-            ? const Center(child: CircularProgressIndicator())
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [SizedBox(height: 160), Center(child: CircularProgressIndicator())],
+              )
             : _error != null && artist == null
                 ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
                     children: [
                       EmptyState(
                           message: _error!,

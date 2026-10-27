@@ -19,6 +19,8 @@
 
 搜索（单曲/歌手/专辑/歌单，分页 + 历史 + 模糊）、首页推荐与榜单、按本机听歌数据挑的每日推荐、自建歌单与收藏、播放页黑胶 + 滚动歌词（含翻译行）、播放历史与统计、后台播放（通知栏/锁屏/线控/下拉播放卡，卡上「上一首/下一首」走的就是应用里那同一对方法）、下载、均衡器、定时停止、断网等一等再重试、音源自检、播放卡自检与一键修复、日志导出。
 
+界面这一层有两条规矩：能自动办的不留按钮，非要她出手时动作就放在提示条上（「换版本」「重试」「接着放」「撤销」），不指路设置页；本机数据没落盘、某一页没拉到、歌中途停了，都要当场在屏幕上说出来，不靠她去猜。循环模式跟音质、主题一样存进设置，重启不回列表循环。
+
 ## 构建
 
 工具链装在 `~/dev`（免管理员）：Flutter 3.47 / JDK 21 / Android SDK。
@@ -65,7 +67,7 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 - 仓库里不提交 `windows/` 那套 C++ 壳子，workflow 里 `flutter create --platforms=windows` 现造。日后 `flutter upgrade` 改壳子文件不会来来回回产生噪声 diff；窗口标题（`L"听歌小窝"`，写成 `\u` 转义让 main.cpp 保持纯 ASCII）也只能在这一步改。
 - 声音换了后端：`just_audio` 官方只有 `android/` 和 `darwin/` 两条实现，桌面上每次播放调用都是 `MissingPluginException` —— 界面起得来、就是放不出。所以加了 `just_audio_media_kit`（libmpv），`main.dart` 里只在 `Platform.isWindows` 那一支注册，原来那句 `JustAudioBackground.init` 原样挪进 `else`；`player_service.dart` 的音频管道同理，安卓走的还是原来那条。libmpv 由 `media_kit_libs_windows_audio` 在构建时拉下来拷到 exe 旁边，构建那步会验它在不在包里。
 - 数据落在 exe 旁边的 `data/`（`lib/util/app_paths.dart`）。桌面版 `getApplicationDocumentsDirectory()` 返回的是用户的「文档」根目录，不收敛就会把 `settings.json`、`library/`、`logs/`、`sources/` 全撒进她的文档里；`data/` 跟着包走，U 盘拷一份就是完整一套。旁边写不动时才退回应用支持目录。安卓落点不变。注意这个 `data/` 跟 Flutter 自己那个 `data/`（`app.so`、`flutter_assets`、`icudtl.dat`）是同一个目录，我们的 `logs/`、`library/` 就并排躺在引擎资源旁边——能用，但不体面，日后想分开就改 `AppPaths._desktopRoot()` 那一个名字。
-- 安卓专属那几样在桌面上直接绕开，不去试：系统均衡器（`AndroidEqualizer` 走 MethodChannel）、下拉菜单那张播放卡的整条自检与接桥。设置页里「这台设备没有提供系统均衡器」那句就是给桌面版的。
+- 安卓专属那几样在桌面上直接绕开，不去试：系统均衡器（`AndroidEqualizer` 走 MethodChannel）、下拉菜单那张播放卡的整条自检与接桥。均衡器那一页里「这台设备没有提供系统均衡器」那句就是给桌面版的。
 - 已知短处：lx-music 音源脚本在桌面上激活会超时（QuickJS 那条桥，日志里那句「音源脚本激活失败」就是它），能出声的是四个端内直连；桌面上也没有媒体会话，切歌只能回应用里点。
 - 验到哪一步了：0.8.35 那个包在本机起得来、界面和封面都正常，`libmpv-2.dll` 确实加载进了进程，旧版那句 `MissingPluginException(… just_audio.methods)` 不再出现，数据也确实落在 `data/` 而没碰「文档」。**但还没真的点过一次播放**——出声与否要看的证据是 `data/logs/play-<日期>.log` 里那句 `[播]`（旧版在那一步只会留 `[崩]`）。在那之前，「桌面版能放整首」只能算推断，不算实测。
 
@@ -73,7 +75,7 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 
 ```bash
 ~/dev/flutter/bin/flutter analyze   # 只剩 lx_engine.dart 里一条已知的 protected member 警告
-~/dev/flutter/bin/flutter test      # 163 条，全离线
+~/dev/flutter/bin/flutter test      # 169 条，全离线
 ```
 
 联网探测脚本放在 `tool/`，按需单独跑；`research/` 是抓下来的第三方脚本和逐条回包，不进仓库。

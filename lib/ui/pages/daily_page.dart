@@ -110,22 +110,32 @@ class _DailyPageState extends State<DailyPage> {
       ),
       backgroundColor: AppTheme.pageBg,
       bottomNavigationBar: const PlayerBar(),
-      body: Builder(
-        builder: (context) {
-          if (_loading && _today.isEmpty) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (_today.isEmpty) {
-            return EmptyState(
-              message: _error == null ? '今天没荐出歌来，下拉再试一次' : '推荐没拉到：$_error',
-              icon: Icons.auto_awesome,
-              actionText: '重新加载',
-              onAction: () => _load(refresh: true),
-            );
-          }
-          return RefreshIndicator(
-            onRefresh: () => _load(refresh: true),
-            child: ListView(
+      body: RefreshIndicator(
+        onRefresh: () => _load(refresh: true),
+        child: Builder(
+          builder: (context) {
+            if (_loading && _today.isEmpty) {
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [SizedBox(height: 160), Center(child: CircularProgressIndicator())],
+              );
+            }
+            if (_today.isEmpty) {
+              // 这一支也得能下拉：那句话写着「下拉再试一次」，可原来下拉只在有歌的
+              // 时候才挂得上，空页面上怎么拉都没有反应。
+              return ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  EmptyState(
+                    message: _error == null ? '今天没荐出歌来，下拉再试一次' : '推荐没拉到：$_error',
+                    icon: Icons.auto_awesome,
+                    actionText: '重新加载',
+                    onAction: () => _load(refresh: true),
+                  ),
+                ],
+              );
+            }
+            return ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.only(bottom: 24),
               children: [
@@ -145,9 +155,9 @@ class _DailyPageState extends State<DailyPage> {
                   ),
                 ),
               ],
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

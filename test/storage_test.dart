@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lyric_music/library/library_store.dart';
+import 'package:lyric_music/models/song.dart';
 import 'package:lyric_music/settings/app_settings.dart';
 import 'package:lyric_music/util/app_log.dart';
 import 'package:lyric_music/util/json_file.dart';
@@ -216,6 +217,55 @@ void main() {
       expect(old.at, 5);
       expect(old.singer, '');
       expect(old.interval, 0);
+    });
+  });
+
+  // 下载映射里的路径是「哪首歌在手机上」的唯一凭据。它一旦丢了（旧版本压根没存
+  // 这张表，或某一行崩了），磁盘上那几十首就再也进不了「下载管理」。
+  // DownloadManager 的文件名就是唯一的自描述来源，这一组钉住它能倒回什么、
+  // 倒不回来的必须返回 null（宁可少一行，也不能把别的歌塞进这一栏）。
+  group('下载文件名倒回歌曲', () {
+    Song? from(String path) => LibraryStore.songFromDownloadPath(path);
+
+    test('DownloadManager 那种命名能整首倒回来，键也对得上', () {
+      final s = from(r'/storage/emulated/0/Music/周杰伦 - 晴天_wy-003fJ8cd0aZMLv_flac.flac');
+      expect(s, isNotNull);
+      expect(s!.source, 'wy');
+      expect(s.songmid, '003fJ8cd0aZMLv');
+      expect(s.name, '晴天');
+      expect(s.singer, '周杰伦');
+      expect(LibraryStore.keyOf(s), 'wy:003fJ8cd0aZMLv');
+    });
+
+    test('反斜杠路径（Windows 版）同样认', () {
+      final s = from(r'D:\songbox\music\某人 - 某歌_tx-002832113861FC5D3D_128k.mp3');
+      expect(s, isNotNull);
+      expect(s!.source, 'tx');
+      expect(s.songmid, '002832113861FC5D3D');
+    });
+
+    test('歌名里带的下划线与横杠不会被当成字段分隔', () {
+      final s = from('/m/陈奕迅 - 好久不见 _ Live_kg-123456_320k.mp3');
+      expect(s, isNotNull);
+      expect(s!.singer, '陈奕迅');
+      expect(s.name, '好久不见 _ Live');
+      expect(s.songmid, '123456');
+    });
+
+    test('认不出来源的返回 null，不硬编成一首别的歌', () {
+      // 来源只能是这五个；一个乱码文件名要是被认成 wy，「下载管理」里就多一行假歌。
+      expect(from('/m/谁 - 什么_zz-1_128k.mp3'), isNull);
+      expect(from('/m/什么_128k.mp3'), isNull, reason: '没有「来源-id」那一段');
+      expect(from('/m/某人 - 某歌_wy-1-2_128k.mp3'), isNull, reason: 'id 里不能带横杠');
+      expect(from('/m/某人 - 某歌'), isNull, reason: '没有扩展名就说不上是一首歌');
+    });
+
+    test('五个来源都认（B 站、酷狗是后来接上的，别让它们落在外面）', () {
+      for (final src in ['wy', 'kw', 'tx', 'bl', 'kg']) {
+        final s = from('/m/某人 - 某歌_$src-id1_128k.mp3');
+        expect(s, isNotNull, reason: '$src 倒不回来');
+        expect(s!.source, src);
+      }
     });
   });
 }

@@ -65,10 +65,16 @@ class _AlbumPageState extends State<AlbumPage> {
       bottomNavigationBar: const PlayerBar(),
       body: RefreshIndicator(
         onRefresh: () => _load(refresh: true),
+        // 三格都得是能拉的列表：RefreshIndicator 挂在不能滚的 child 上就是死的，
+        // 「下拉刷新」在这两种画面上点了没反应。
         child: _loading && album == null
-            ? const Center(child: CircularProgressIndicator())
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [SizedBox(height: 160), Center(child: CircularProgressIndicator())],
+              )
             : _error != null && album == null
                 ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
                     children: [
                       EmptyState(
                           message: _error!,

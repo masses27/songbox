@@ -132,38 +132,76 @@ class DownloadManager extends ChangeNotifier {
   }
 
   /// Removes a single downloaded song (record + file).
-  Future<void> deleteDownload(Song song) async {
+  ///
+  /// 返回 false 表示文件没删掉（正被播放器占着）。这时候记录必须留着：
+  /// 把那一行删了，歌还在磁盘上占着位置，却再也没有一个列表认它。
+  Future<bool> deleteDownload(Song song) async {
     final path = LibraryStore.instance.localFile(song);
     if (path != null) {
-      try {
-        await File(path).delete();
-      } catch (_) {}
+      final f = File(path);
+      if (f.existsSync()) {
+        try {
+          f.deleteSync();
+        } catch (_) {
+          return false;
+        }
+      }
     }
     LibraryStore.instance.remove(LibraryKind.downloaded, song);
     _tasks.remove('${song.source}:${song.songmid}');
     notifyListeners();
+    return true;
   }
 
-  /// Bulk delete used by the settings page; returns how many files went away.
+  /// Bulk delete used by the settings page; returns how many **bytes** went away.
+  ///
+  /// 按磁盘删，不按清单删。清单是那份 `downloads_paths.json`，它少几行太常见了：
+  /// 一次写盘失败、旧版本「全部删除」把它整罐清空过一次、换机时只带走了歌没带走记录。
+  /// 那几首的文件还原样占着她手机的存储，界面上却一首都不认——以前这里照着清单循环，
+  /// 于是「全部删除」删完还剩一半，而提示条照报删除前的总占用，说成一个没发生的数。
   Future<int> deleteAllDownloads() async {
     // 先把还在下的取消掉：不取消的话，这一轮清空跑完它们还在往文件里写，
     // 写完又把路径记回库里——界面上就是「明明清了，过一会儿又冒出一首」。
     for (final t in _tasks.values) {
       if (t.running) t.token.cancel('清空下载');
     }
-    var n = 0;
+    var bytes = 0;
+    final deleted = <String>{};
+    final dir = await musicDir();
+    if (dir.existsSync()) {
+      for (final e in dir.listSync()) {
+        if (e is! File) continue;
+        final size = _size(e);
+        try {
+          e.deleteSync();
+          bytes += size;
+          deleted.add(e.path);
+        } catch (_) {}
+      }
+    }
+    // 清单里指向别处的（早期版本存过外部存储的公共目录），照着路径再补一轮。
     for (final song in LibraryStore.instance.list(LibraryKind.downloaded)) {
       final path = LibraryStore.instance.localFile(song);
-      if (path == null) continue;
+      if (path == null || deleted.contains(path)) continue;
+      final f = File(path);
+      final size = _size(f);
       try {
-        await File(path).delete();
-        n++;
+        f.deleteSync();
+        bytes += size;
       } catch (_) {}
     }
     _tasks.clear();
     LibraryStore.instance.replaceDownloaded(const []);
     notifyListeners();
-    return n;
+    return bytes;
+  }
+
+  static int _size(File f) {
+    try {
+      return f.lengthSync();
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// Frees the image/HTTP cache. Only the cache *contents* are removed, since
@@ -180,6 +218,24 @@ class DownloadManager extends ChangeNotifier {
           } else if (e is Directory) {
             await e.delete(recursive: true);
           }
+        } catch (_) {}
+      }
+    }
+    return bytes;
+  }
+
+  /// 只量不删，给「清除缓存」那句确认用。
+  ///
+  /// 原来弹窗上的数字是 `deleteImageCache()` 顺手报回来的 —— 也就是说她还没按
+  /// 「只清缓存」，缓存就已经没了，那句确认从一开始就没得选。
+  static Future<int> imageCacheBytes() async {
+    var bytes = 0;
+    for (final dir in await _cacheDirs()) {
+      if (!dir.existsSync()) continue;
+      for (final e in dir.listSync()) {
+        if (e is! File) continue;
+        try {
+          bytes += e.lengthSync();
         } catch (_) {}
       }
     }

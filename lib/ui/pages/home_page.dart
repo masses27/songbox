@@ -38,6 +38,10 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
   String? _rankPlaying;
   String? _error;
 
+  /// 三块里坏了哪几块、各自为什么。原来只留第一条错误（`_error ??=`），
+  /// 两块一起坏的时候那句「首页有一部分没拉到」看不出是几部分、是哪部分。
+  List<({String block, String why})> _failedBlocks = const [];
+
   @override
   void initState() {
     super.initState();
@@ -56,31 +60,46 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
     _scroll.animateTo(0, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
   }
 
+  /// 三块内容一块都没落下来：只有这时候才该用整页空态挡人。
+  /// 坏一块的情况下另外两块照样在屏幕上，错误得写成一行挂在中间，不然她看不见。
+  bool get _nothingOnScreen => _ranks.isEmpty && _sheets.isEmpty && _newSongs.isEmpty;
+
   Future<void> _load({bool refresh = false}) async {
     setState(() {
       _loading = _ranks.isEmpty && _sheets.isEmpty;
       _error = null;
+      _failedBlocks = const [];
       if (refresh) _sheetsOffset = 0;
     });
     final lib = BuiltinLibrary.instance;
     if (refresh) lib.invalidateCatalog();
+    final failed = <({String block, String why})>[];
+    void note(String block, Object e) {
+      _error ??= humanizeError(e);
+      failed.add((block: block, why: humanizeError(e)));
+    }
+
     // Each block loads independently so one dead endpoint cannot blank the page.
+    // 坏掉的那几块按屏幕上那三个标题记账，她一眼就能对上少了哪一块。
     await Future.wait([
       lib.rankList('wy').then((v) => _ranks = v).catchError((e) {
-            _error ??= humanizeError(e);
+            note('排行榜', e);
             return const <RankInfo>[];
           }),
       lib.recommendedSheets().then((v) => _sheets = v).catchError((e) {
-            _error ??= humanizeError(e);
+            note('推荐歌单', e);
             return const <SheetInfo>[];
           }),
       lib.recommendedSongs().then((v) => _newSongs = v).catchError((e) {
-            _error ??= humanizeError(e);
+            note('推荐新歌曲', e);
             return const <Song>[];
           }),
     ]);
     if (!mounted) return;
-    setState(() => _loading = false);
+    setState(() {
+      _loading = false;
+      _failedBlocks = failed;
+    });
   }
 
   /// 「换一批」：推荐歌单接口认 offset，往后挪 12 张就是新的一批。
@@ -193,12 +212,40 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
               onSources: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SourcesPage())),
             ),
           ),
-          if (_error != null && _ranks.isEmpty && _sheets.isEmpty)
+          if (_error != null && _nothingOnScreen)
             SliverToBoxAdapter(
               child: EmptyState(
                 message: '推荐内容没拉到：$_error',
                 actionText: '重新加载',
                 onAction: () => _load(refresh: true),
+              ),
+            ),
+          if (_failedBlocks.isNotEmpty && !_nothingOnScreen)
+            // 三块各自加载，坏一块时另外两块照样在屏幕上 —— 原来那种情况下那句错误
+            // 一点地方都没有，看上去就像「今天的推荐就这么点」，她不会想到去下拉。
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // 坏几块写几行：两块一起坏的时候，只显示第一条错误会把
+                          // 另一块的问题盖掉。
+                          for (final f in _failedBlocks)
+                            Text('${f.block}没拉到：${f.why}',
+                                style: const TextStyle(fontSize: 12, color: AppTheme.primary)),
+                        ],
+                      ),
+                    ),
+                    TextButton(
+                        onPressed: () => _load(refresh: true),
+                        child: const Text('重试', style: TextStyle(fontSize: 13))),
+                  ],
+                ),
               ),
             ),
           if (_loading && _ranks.isEmpty && _sheets.isEmpty)
@@ -351,14 +398,15 @@ class _SongCarousel extends StatelessWidget {
           return SizedBox(
             width: 96,
             child: GestureDetector(
+              // 整格都能点。原来只有上面那张封面认点击，歌名、歌手那两行按下去
+              // 什么也不发生——她眼睛盯着的是字，手指也点在那儿。
+              behavior: HitTestBehavior.opaque,
+              onTap: () => onTap(s, items),
               onLongPress: () => showSongMenu(context, s, siblings: items),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  GestureDetector(
-                    onTap: () => onTap(s, items),
-                    child: CoverTile(label: '', imageUrl: s.pic, size: 96),
-                  ),
+                  CoverTile(label: '', imageUrl: s.pic, size: 96),
                   const SizedBox(height: 4),
                   Text(s.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
                   Text(s.singer, maxLines: 1, overflow: TextOverflow.ellipsis,

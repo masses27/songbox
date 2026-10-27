@@ -58,7 +58,8 @@ class _RankDetailPageState extends State<RankDetailPage> {
 
   Future<void> _load({bool refresh = false}) async {
     setState(() {
-      _loading = true;
+      // 榜已经刷出来了就别把整页换成转圈，下拉刷新不该先让人空看一眼。
+      _loading = _songs.isEmpty;
       _error = null;
       _moreError = null;
     });
@@ -75,6 +76,8 @@ class _RankDetailPageState extends State<RankDetailPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = humanizeError(e));
+      // 旧榜单还在屏幕上时错误块不出现（它只占空列表那一格），不吭一声就是「点了没反应」。
+      if (_songs.isNotEmpty) toast(context, '这个榜没刷新下来：${humanizeError(e)}');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -132,15 +135,22 @@ class _RankDetailPageState extends State<RankDetailPage> {
       body: RefreshIndicator(
         onRefresh: () => _load(refresh: true),
         child: _loading
-            ? ListView(children: const [SizedBox(height: 160), Center(child: CircularProgressIndicator())])
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [SizedBox(height: 160), Center(child: CircularProgressIndicator())],
+              )
             : _error != null && _songs.isEmpty
                 ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
                     children: [
                       EmptyState(message: _error!, actionText: '重试', onAction: () => _load(refresh: true)),
                     ],
                   )
                 : _songs.isEmpty
-                    ? ListView(children: const [EmptyState(message: '这个榜单暂时没有内容')])
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: const [EmptyState(message: '这个榜单暂时没有内容')],
+                      )
                     : Column(
                         children: [
                           VipScanBar(songs: _songs),
@@ -182,16 +192,30 @@ class _RankDetailPageState extends State<RankDetailPage> {
         ),
       );
     }
-    if (_loadingMore || _hasMore) {
+    if (_loadingMore) {
       return const Padding(
         padding: EdgeInsets.all(16),
         child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
       );
     }
+    if (_hasMore) {
+      // 滑到底自己会接下一页，可榜单短到不足一屏时那一划永远不会发生 ——
+      // 原来这里只剩一根停不下来的圈。转圈只留给真在加载的那几秒。
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: Center(
+          child: TextButton.icon(
+            onPressed: _loadMore,
+            icon: const Icon(Icons.expand_more, size: 18),
+            label: Text('接着加载后面那些', style: const TextStyle(fontSize: 12)),
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 22),
       child: Center(
-        child: Text('已全部加载 · 共 ${_songs.length} 首',
+        child: Text('已经到底 · 共 ${_songs.length} 首',
             style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       ),
     );

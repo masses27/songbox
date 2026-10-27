@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../models/song.dart';
 import '../../music_sdk/source_probe.dart';
 import '../../settings/app_settings.dart';
 import '../player/player_bar.dart';
 import '../theme.dart';
+import '../widgets.dart';
 
 /// 音源自检：把每个源各问一次，服务器回什么就摊什么。
 ///
@@ -29,14 +32,29 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
   bool _busy = false;
   bool _done = false;
 
+  /// 「停下」不是把这一项掐断（那几条请求本身就收不回），是手上这条问完就不再问下一条。
+  /// 页一打开就自动跑，网差的时候五条能吊上半分钟，没有出口等于只能退出去。
+  bool _stopped = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 这一页存在的目的就是「跑一遍看结果」，原来还得她自己按那颗按钮。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _run();
+    });
+  }
+
   Future<void> _run() async {
     if (_busy) return;
     setState(() {
       _busy = true;
+      _stopped = false;
       _done = false;
       _results.clear();
     });
     for (final step in _steps) {
+      if (_stopped) break;
       try {
         final r = await step.run();
         if (!mounted) return;
@@ -60,6 +78,33 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
     });
   }
 
+  /// 整屏抄成一段话。原来只能一行一行长按选中、再截屏拼，她想把这些发给我正好做不到。
+  Future<void> _copyAll() async {
+    await Clipboard.setData(ClipboardData(text: _report()));
+    if (!mounted) return;
+    toast(context, '已复制这一屏的结果，可以直接粘贴发出去');
+  }
+
+  String _report() {
+    final t = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final lines = <String>[
+      '听歌小窝 音源自检 ${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}  '
+          '音质 ${qualityLabel(AppSettings.instance.quality)}${_stopped ? '（中途停了）' : ''}',
+    ];
+    for (final step in _steps) {
+      final r = _results[step.label];
+      if (r == null) {
+        lines.add('${step.label}：没问到');
+        continue;
+      }
+      final mark = r.ok ? '通' : r.warn ? '本来用不上' : '不通';
+      lines.add('${step.label}：$mark · ${r.message}');
+      if (!r.ok && r.raw.isNotEmpty) lines.add('　${r.raw.replaceAll('\n', '\n　')}');
+    }
+    return lines.join('\n');
+  }
+
   @override
   Widget build(BuildContext context) {
     final quality = AppSettings.instance.quality;
@@ -68,7 +113,18 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
     final inert = _results.values.where((r) => !r.ok && r.warn).length;
     final actionable = _results.length - okCount - inert;
     return Scaffold(
-      appBar: AppBar(title: const Text('音源自检')),
+      appBar: AppBar(
+        title: const Text('音源自检'),
+        // 跑完（或停下）才有东西可抄；还在跑的时候按下去抄到的是半截。
+        actions: [
+          if (!_busy && _results.isNotEmpty)
+            IconButton(
+              tooltip: '复制这一屏的结果',
+              onPressed: _copyAll,
+              icon: const Icon(Icons.copy_rounded, size: 20),
+            ),
+        ],
+      ),
       backgroundColor: AppTheme.pageBg,
       bottomNavigationBar: const PlayerBar(),
       body: ListView(
@@ -79,20 +135,27 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
             child: Text(
               '逐个问一遍各个曲库：能不能搜到、能不能拿到整首的播放地址。'
               '同一首歌在公司网和家里 WiFi 上的结果可能不一样，'
-              '所以换到哪个网络都可以再跑一次。当前音质：$quality。',
+              '所以换到哪个网络都可以再进来跑一次。当前音质：${qualityLabel(quality)}。',
               style: TextStyle(fontSize: 12, height: 1.6, color: AppTheme.textSecondary),
             ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: FilledButton.icon(
-              onPressed: _busy ? null : _run,
-              icon: _busy
-                  ? const SizedBox(
-                      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.play_arrow, size: 20),
-              label: Text(_busy ? '正在检查…' : _done ? '再跑一次' : '开始检查'),
-              style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _busy ? () => setState(() => _stopped = true) : _run,
+                icon: _busy
+                    ? const Icon(Icons.stop_circle_outlined, size: 20)
+                    : const Icon(Icons.play_arrow, size: 20),
+                label: Text(_busy
+                    // 顺便报进度：原来那颗转圈的按钮看不出还剩几条。
+                    ? _stopped
+                        ? '等第 ${(_results.length + 1).clamp(1, _steps.length)} 条问完就停'
+                        : '第 ${(_results.length + 1).clamp(1, _steps.length)} / ${_steps.length} 条 · 点按停下'
+                    : _done ? '再跑一次' : '开始检查'),
+                style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
+              ),
             ),
           ),
           if (_done)
@@ -100,7 +163,7 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text(
                 '${_results.length} 项里 $okCount 项拿到了能直接播的地址。'
-                '${actionable > 0 ? '还有 $actionable 项不通，值得看一眼。' : '不通的那几项本来就用不上，不用管。'}',
+                '${_stopped ? '剩下的让你停下了，没问。' : actionable > 0 ? '还有 $actionable 项不通，值得看一眼。' : '不通的那几项本来就用不上，不用管。'}',
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               ),
             ),

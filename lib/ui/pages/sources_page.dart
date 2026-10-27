@@ -129,6 +129,9 @@ class _SourcesPageState extends State<SourcesPage> {
         // 原来只是 setState，下拉一下什么也没发生；这里直接走真正的「全部更新」。
         onRefresh: _refreshAll,
         child: ListView(
+          // 内置音源只有几行时列表还不足一屏，不给这个 physics 下拉根本拉不动，
+          // 那句「下拉一下什么也没发生」就还留着。
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(12),
           children: [
             if (engine != null && engine.inited)
@@ -284,28 +287,74 @@ class _SourcesPageState extends State<SourcesPage> {
   Future<void> _showUrlImport() async {
     if (_importing) return;
     _urlCtrl.clear();
+    var note = '';
     final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('从链接导入音源'),
-        content: TextField(
-          controller: _urlCtrl,
-          decoration: const InputDecoration(hintText: 'https://…/xxx.js', labelText: '脚本地址'),
-          keyboardType: TextInputType.url,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('从链接导入音源'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _urlCtrl,
+                autofocus: true,
+                decoration: const InputDecoration(hintText: 'https://…/xxx.js', labelText: '脚本地址'),
+                keyboardType: TextInputType.url,
+              ),
+              TextButton.icon(
+                // 长网址在手机上选中、复制、再对着另一边的地址栏敲进来，每一步都会错。
+                // 链接已经复制过的时候，这里一步就填上；剪贴板空着也要当场说，
+                // 不能按了没反应（提示条会被这层对话框盖住，所以写在框里）。
+                onPressed: () async {
+                  final t = (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim() ?? '';
+                  if (t.isEmpty) {
+                    setDialogState(() => note = '剪贴板里是空的，先复制脚本地址');
+                    return;
+                  }
+                  _urlCtrl.text = t;
+                  setDialogState(() => note = '已填上剪贴板里的地址');
+                },
+                icon: const Icon(Icons.content_paste, size: 18),
+                label: const Text('粘剪贴板', style: TextStyle(fontSize: 12)),
+              ),
+              if (note.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Text(note, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('导入')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('导入')),
-        ],
       ),
     );
     if (ok != true) return;
+    // 下面要拿 context 说话：对话框关掉那一刻，这一页可能已经被退出去了。
+    if (!mounted) return;
     final url = _urlCtrl.text.trim();
-    if (url.isEmpty) return;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      _toast('链接要以 http:// 或 https:// 开头');
+    // 原来是 if (url.isEmpty) return;：那一格没填的话对话框一关，什么提示都没有，
+    // 看上去像导入失败、又像她记错了，只能从头再点一遍。
+    if (url.isEmpty) {
+      _toast('「脚本地址」那一格还是空的');
       return;
     }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      // 少敲的那截不用她回去补：提示条上直接给一颗「就这么试」。
+      toast(context, '链接没有 http:// 或 https:// 开头',
+          actionLabel: '补上 https:// 再试', onAction: () => _importFromUrl('https://$url'));
+      return;
+    }
+    await _importFromUrl(url);
+  }
+
+  Future<void> _importFromUrl(String url) async {
+    // 也可能是从提示条那颗「补上 https:// 再试」按进来的，隔了几秒，页面早退出去了。
+    if (!mounted) return;
     try {
       setState(() => _importing = true);
       final resp = await Dio(BaseOptions(

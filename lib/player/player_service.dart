@@ -82,19 +82,23 @@ enum PlayMode { list, single, random, none }
 class EqPreset {
   final String name;
   final List<double> gains;
-  const EqPreset(this.name, this.gains);
+
+  /// 这一档听上去是什么：`+8 +5 0 -2 -1` 这种数字读不出「低音更沉」还是「人声更贴」，
+  /// 而选音效靠的正是后面那半句。
+  final String desc;
+  const EqPreset(this.name, this.gains, {this.desc = ''});
 }
 
 const eqPresets = <EqPreset>[
-  EqPreset('平坦', [0, 0, 0, 0, 0]),
-  EqPreset('重低音', [8, 5, 0, -2, -1]),
-  EqPreset('清晰人声', [-2, 0, 4, 3, 1]),
-  EqPreset('流行', [3, 1, -1, 2, 4]),
-  EqPreset('摇滚', [5, 2, -1, 3, 4]),
-  EqPreset('古典', [4, 2, 0, 2, 3]),
-  EqPreset('电子', [6, 3, -1, 2, 5]),
-  EqPreset('柔和', [2, 1, 0, 1, 2]),
-  EqPreset('低音减弱', [-4, -2, 0, 1, 2]),
+  EqPreset('平坦', [0, 0, 0, 0, 0], desc: '不加不减，原样放出来'),
+  EqPreset('重低音', [8, 5, 0, -2, -1], desc: '鼓点与贝斯更沉，人声往后让一点'),
+  EqPreset('清晰人声', [-2, 0, 4, 3, 1], desc: '人声拉到前面，伴奏退一步'),
+  EqPreset('流行', [3, 1, -1, 2, 4], desc: '两头抬一点，听感更亮'),
+  EqPreset('摇滚', [5, 2, -1, 3, 4], desc: '低频厚实、高音更冲'),
+  EqPreset('古典', [4, 2, 0, 2, 3], desc: '整体略抬，乐器分得开一点'),
+  EqPreset('电子', [6, 3, -1, 2, 5], desc: '低音狠、高音亮'),
+  EqPreset('柔和', [2, 1, 0, 1, 2], desc: '轻微润色，久听不累'),
+  EqPreset('低音减弱', [-4, -2, 0, 1, 2], desc: '觉得轰头时选这个，人声更干净'),
 ];
 
 typedef UrlResolver = Future<String> Function(Song song, String quality);
@@ -154,6 +158,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   PlayMode playMode = PlayMode.list;
   String eqPresetName = '平坦';
   List<double> eqGains = const [0, 0, 0, 0, 0];
+
+  /// 挂/摘效果器失败的那句话，给均衡器页直接看。
+  String? eqError;
   bool _eqRestored = false;
 
   /// 倍速追剧/听歌常用，跨歌曲保持。
@@ -180,6 +187,16 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// A non-failure message worth telling the user about (定时关闭, 全部跳过 …).
   String? notice;
   int noticeTick = 0;
+
+  /// 正在等重连时给界面的一句话；没在等就是 null。
+  ///
+  /// 和 [notice] 的分别在那一条会自己消失：提示条两秒收走，而等重连是 5 秒、15 秒、
+  /// 30 秒地等。屏幕上一点动静都没有的话，她的感受是「歌停了也不知道它在不在干活」，
+  /// 只能自己反复点播放。这一句挂在播放条上，等回来自己就没了。
+  String? get waitNote {
+    if (_netRetry == null) return null;
+    return _netRetries <= 1 ? '在等网络回来，会自动接着放' : '第 $_netRetries 次等网络回来';
+  }
 
   /// 下拉菜单那张播放卡没到系统里时，这里递一次信：主壳看见新 tick 就把
   /// 「去开启 / 重发一次」放到她手边的提示条上，而不是让她去设置页里找。
@@ -320,6 +337,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     // 预取目录里还留着上次下的整首，先扫进内存表：这趟磁盘往返不该排在第一次切歌前面。
     unawaited(AudioPrefetch.instance.prime());
     _speed = speeds.contains(AppSettings.instance.playbackSpeed) ? AppSettings.instance.playbackSpeed : 1.0;
+    // 循环模式跟着人走，不跟着这一次队列走：存的名字对不上（手改过设置文件）就当列表循环。
+    playMode =
+        PlayMode.values.firstWhere((m) => m.name == AppSettings.instance.playMode, orElse: () => PlayMode.list);
     // 效果器随播放器实例一起没了，界面先按存下来的名字显示，第一首再接上真值。
     final savedEq = AppSettings.instance.eqPreset;
     eqPresetName = savedEq == '关闭' || eqPresets.any((p) => p.name == savedEq) ? savedEq : '关闭';
@@ -329,7 +349,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       // 桥那半截的 listener 清空（AudioService.java:565 和 :363）。之后卡照样贴得出来
       // （发通知走的是静态 instance，用不着 listener），按钮却全落在空处，而且界面
       // 一点异常都收不到。放歌中途断流、地址坏掉都会报 idle，所以这里得自己接回去。
-      if (s.processingState == ProcessingState.idle) _scheduleBridgeHeal('放歌中途桥被拆了');
+      if (s.processingState == ProcessingState.idle) {
+        _scheduleBridgeHeal('放歌中途桥被拆了');
+        _tellIfIdleStopped();
+      }
     });
     _playingSub = _ap.playingStream.listen((p) {
       // 那张卡是进入播放态那一刻才贴上去的，所以每次开始放之后都去原生看一眼。
@@ -353,12 +376,42 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     });
     _positionSub = _ap.positionStream.listen((p) {
       if (_ap.playing) _lastHeard = p;
+      _releaseSeekHold(p);
       if (_updateLyricIndex(p)) notifyListeners();
       _maybePrefetch(p);
     });
     _errorSub = _ap.errorStream.listen(_onPlayerError);
     // 桥那边出的错原本一个字节都不落地：接住它，日志和取证那一行才有得可看。
     _bridgeSub = AudioService.asyncError.listen(_onBridgeError);
+  }
+
+  /// 播放器进了 idle、又没有任何一条错误跟着来，界面上就是「歌自己停了，什么也没写」。
+  ///
+  /// 这一种最难转述：她只会说「放着放着就没声了」。这里做两件事：把这一停说出来，
+  /// 并且把停住的位置留下（[_resumeAt]），省得她点「接着放」之后从头再听一遍。
+  /// 接桥那一路（[_scheduleBridgeHeal]）只管下拉菜单那张卡，接不回声音，所以话里
+  /// 不敢写「正在自己接回来」——原来那句就是这么写的，人等半天，歌没回来。
+  /// 同一首只说一次，idle 会连着报好几遍。
+  String? _idleNotedKey;
+
+  /// 界面上那句提示要不要给一颗「接着放」：只有这种「停了、又没人报错」才要。
+  bool get idleStopped => _idleNotedKey != null;
+
+  void _tellIfIdleStopped() {
+    final song = current;
+    if (song == null || busy || _netRetry != null || error != null) return;
+    final key = LibraryStore.keyOf(song);
+    if (_idleNotedKey == key) return;
+    _idleNotedKey = key;
+    // 位置存下来给「接着放」用；对不上这首歌，playAt 自己会把它当没这回事。
+    if (_lastHeard > Duration.zero) {
+      _resumeAt = _lastHeard;
+      _resumeKey = key;
+    }
+    notice = '「${_t(song)}」中途停了';
+    noticeTick++;
+    AppLog.add('播', '播放器进 idle 且无报错：「${_t(song)}」（停在 ${_mm(_lastHeard)}）');
+    notifyListeners();
   }
 
   void _onBridgeError(Object e) {
@@ -438,6 +491,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> playList(List<Song> songs, int start) async {
     if (songs.isEmpty) return;
     _failStreak = 0;
+    // 「播完这首就停」是给上一段的收尾用的，她重新挑了一整条队列就该跟着清掉，
+    // 否则新歌单第一首放完就哑了。
+    _stopAfterCurrent = false;
     // 她重新挑了一整条队列，上一首断流留下的位置就此作废：从这一行的开头播才对得上意图。
     _resumeAt = null;
     _resumeKey = null;
@@ -529,6 +585,11 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       _netRetries = 0;
     }
     _lastHeard = Duration.zero;
+    // 换了一首就是新的一分钟：上一首拖到的那个目标不该再压着这一首的进度头。
+    _seekHold = null;
+    // 重新开播就是「她自己接回来了」：那句「中途停了」和它那颗键该一起收走，
+    // 同一首下次再停在半路也还要能说一次。
+    _idleNotedKey = null;
     if (resume != null) AppLog.add('播', '「${_t(song)}」要从 ${_mm(resume)} 接着放');
     // 有没有拿到地址，决定失败该按哪条路收拾：拿不到是取链的问题（会员墙、真的没有免费版），
     // 重取同一条链子还是拿不到；拿到了却放不出，才是那条地址本身坏了。
@@ -607,6 +668,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     _netRetry?.cancel();
     _netRetry = Timer(Duration(seconds: secs), () {
+      // 到点就不等了：这一句是给「还在等」用的，先摘掉再决定要不要重试，
+      // 免得重试那一趟正在跑、界面上还挂着「在等网络回来」。
+      _netRetry = null;
       // 她随时可能自己点了别的歌，序号对不上就当这次作废。
       if (gen != _generation) return;
       unawaited(retry());
@@ -640,7 +704,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     unawaited(Future<void>.delayed(const Duration(milliseconds: 700), () {
       if (gen != _generation) return;
       AppLog.add('跳', '连着 $_failStreak 首放不出，跳到下一首');
-      unawaited(next());
+      unawaited(next(manual: false));
     }));
   }
 
@@ -733,7 +797,17 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     // 听完比「点开过」强得多：整首都记上。位置取总时长，在线流的 duration
     // 有时不报，退回曲库里现成的那个 interval。
     _endNoted = LibraryStore.keyOf(cur);
-    _noteHeard(cur, heard: _currentTotal ?? _lastHeard, completed: true);
+    _noteHeard(cur, heard: total ?? _lastHeard, completed: true);
+    // 「播完这首就停」排在循环模式之前：这是她此刻最明确的一句意愿，
+    // 循环那种长期设定不该盖过来。
+    if (_stopAfterCurrent) {
+      _stopAfterCurrent = false;
+      unawaited(_ap.pause());
+      notice = '「${_t(cur)}」放完了，按你说的停下';
+      noticeTick++;
+      notifyListeners();
+      return;
+    }
     switch (playMode) {
       case PlayMode.single:
         if (LibraryStore.instance.hasLocalFile(cur)) {
@@ -799,7 +873,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// 当前这首的总时长。在线流的 duration 要等缓冲够才有，个别源甚至一直不报；
   /// 曲库里的 interval 是现成的。缺了这一层兜底，预取窗口永远算不出来，
   /// 下一首就永远不备货——听感上就是「每次切歌都要等」。
-  Duration? get _currentTotal {
+  ///
+  /// 界面上那两条进度线也读这个：只认播放器那一份的话，开头几秒没有长度，
+  /// 进度条整条变成一根转圈的模糊线，既拖不动也看不出这首歌还剩多久。
+  Duration? get total {
     final d = duration;
     if (d != null && d > Duration.zero) return d;
     final sec = current?.interval ?? 0;
@@ -830,7 +907,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   ///
   /// 窗口给到 150 秒——90 秒在网络差一点的时候刚好差那一截，白等。
   void _maybePrefetch(Duration pos) {
-    final total = _currentTotal;
+    final total = this.total;
     if (total == null || _prefetchFor == index || total - pos > const Duration(seconds: 150)) return;
     _prefetchFor = index;
     final url = _urlResolver;
@@ -857,6 +934,29 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
       unawaited(lyric(s).catchError((_) => LyricResult(lyric: '')));
+    }
+  }
+
+  /// 手动切歌那一刻把后面那几首的整首备好。
+  ///
+  /// 常规备货排在「本曲快收尾」那一站，可手动跳过的人不等收尾：连着点三四首，
+  /// 每一首都得现场取链、现场缓冲，听感就是「点一下空一秒」。跳完立刻补这一发，
+  /// 下一跳就有现成文件；`preloadNext` 关着的话 [AudioPrefetch.warm] 自己会 return。
+  void _deepWarm() {
+    final url = _urlResolver;
+    if (url == null) return;
+    final quality = AppSettings.instance.quality;
+    for (final i in _upcomingIndexes()) {
+      final s = queue[i];
+      final servedBy = LibraryStore.instance.swapSongFor(s)?.source;
+      if (LibraryStore.instance.localFile(s) != null ||
+          AudioPrefetch.instance.has(s, quality, servedBy: servedBy)) {
+        continue;
+      }
+      unawaited(url(s, quality)
+          .then((u) => AudioPrefetch.instance.warm(s, quality, u,
+              servedBy: LibraryStore.instance.swapSongFor(s)?.source ?? servedBy))
+          .catchError((_) {}));
     }
   }
 
@@ -1016,7 +1116,28 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     // 拖进度条也是「她听到的位置」：不回写这里，往回拖之后万一断流，重连会把人送
     // 回拖动之前的那一秒，听起来就像歌自己乱跳了一段。
     _lastHeard = d;
+    // 播放器接住这一跳要几百毫秒，在线流还得先把那一段缓冲回来。这期间位置流
+    // 报的还是旧的点，进度头会先「弹回」原处再跳过去——看着就像没拖准。
+    _seekHold = d;
+    _seekHoldUntil = DateTime.now().add(const Duration(seconds: 10));
     await _ap.seek(d);
+  }
+
+  /// 拖过去之后、播放器真正到位之前的那个目标位置（见 [seek]）。
+  Duration? _seekHold;
+  DateTime _seekHoldUntil = DateTime(2000);
+  Duration? get seekHold => _seekHold;
+
+  void _releaseSeekHold(Duration p) {
+    final h = _seekHold;
+    if (h == null) return;
+    final delta = p - h;
+    final off = delta < Duration.zero ? -delta : delta;
+    // 追上就交回真实位置；一直追不上（拖进还没缓冲的末尾、那次 seek 干脆失败）
+    // 也不能把进度头悬在假位置上，十秒后同样交回去。
+    if (off <= const Duration(seconds: 3) || DateTime.now().isAfter(_seekHoldUntil)) {
+      _seekHold = null;
+    }
   }
   Future<void> setVolume(double v) => _ap.setVolume(v);
 
@@ -1032,10 +1153,13 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  Future<void> next() async {
+  /// 切到下一首。`manual` 是「她点的」还是「放不出自己跳的」——前者要顺手把后面的歌
+  /// 整首都备下来（见 [_deepWarm]），后者正撞在网络差的时候，别再抢带宽。
+  Future<void> next({bool manual = true}) async {
     if (queue.isEmpty) return;
     final i = playMode == PlayMode.random ? _randomNextIndex() : (index + 1) % queue.length;
     await playAt(i);
+    if (manual && _failStreak == 0) _deepWarm();
   }
 
   /// 上一首。已经听到 3 秒之后时先回到本曲开头，这跟系统音乐应用一致，
@@ -1048,10 +1172,27 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     }
     final i = index - 1 < 0 ? queue.length - 1 : index - 1;
     await playAt(i);
+    if (_failStreak == 0) _deepWarm();
   }
 
   /// Retry whatever just failed.
   Future<void> retry() => playAt(index);
+
+  /// 提示条上那颗「重试」。
+  ///
+  /// 要认 [failedSong] 而不是「现在屏幕上这首」：放不出之后自动跳到下一首只要一秒多，
+  /// 她读完那句话抬手去点，点到的却是另一首歌——想重来的那首还留在原地没动。
+  Future<void> retryFailed() async {
+    final f = failedSong;
+    if (f != null) {
+      final i = queue.indexWhere((s) => LibraryStore.keyOf(s) == LibraryStore.keyOf(f));
+      if (i >= 0 && i != index) {
+        await playAt(i);
+        return;
+      }
+    }
+    await playAt(index);
+  }
 
   /// 卡上切歌那一下包一层：动作就是界面里那两个键的 [action]，这里只多记一行
   /// 「她是按了卡」，并把异常接住 —— 让它逃进 media 通道只会换成一次错误回执，
@@ -1082,6 +1223,8 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _resumeAt = null;
     _resumeKey = null;
     _lastHeard = Duration.zero;
+    _seekHold = null;
+    _idleNotedKey = null;
     // 这一首已经记过「听完」，但那笔账属于上一段收听。留着它，下次在这首歌上
     // 听到一半跳走就不再记账了 —— 曲库只会越听越少地漏掉信号。
     _endNoted = null;
@@ -1095,6 +1238,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _randomPick = null;
     error = null;
     busy = false;
+    // 队列都撤了，「播完这首就停」「再定一次」这两句就不该还挂着：
+    // 下一批歌是另一件事，不该被上一段睡前的意愿管着。
+    _stopAfterCurrent = false;
+    sleepJustEnded = false;
     notifyListeners();
   }
 
@@ -1181,6 +1328,8 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   void setSleepTimer(Duration d) {
     _sleepTimer?.cancel();
     _sleepTick?.cancel();
+    _lastSleep = d;
+    sleepJustEnded = false;
     _sleepEndsAt = DateTime.now().add(d);
     _sleepTimer = Timer(d, _onSleepElapsed);
     // Repaint the remaining-time label without a per-second ticker storm.
@@ -1197,6 +1346,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _sleepTick = null;
     if (_sleepEndsAt == null) return;
     _sleepEndsAt = null;
+    // 按了总得回一句：原来这一条只是让屏幕上那个倒计时消失，
+    // 到底是取消了还是又出别的事，屏幕上没有任何说法。
+    notice = '定时已取消，这一轮会一直播下去';
+    noticeTick++;
     notifyListeners();
   }
 
@@ -1206,7 +1359,32 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _sleepTick = null;
     _sleepEndsAt = null;
     unawaited(_ap.pause());
+    sleepJustEnded = true;
     notice = '定时播放已到点，已停止';
+    noticeTick++;
+    notifyListeners();
+  }
+
+  /// 定时到点停下了，但「再听半小时」是常事：提示条上直接给一次续，
+  /// 别让她再去更多菜单里翻那一排分钟数。
+  bool sleepJustEnded = false;
+  Duration _lastSleep = const Duration(minutes: 30);
+
+  /// 上一次定的多长，给「再定一次」和菜单里的当前勾选用。
+  Duration get lastSleep => _lastSleep;
+
+  void rearmSleepTimer() {
+    sleepJustEnded = false;
+    setSleepTimer(_lastSleep);
+  }
+
+  /// 「播完当前这首停止」：不想掐表、只想让手里这一首是最后一首。
+  bool _stopAfterCurrent = false;
+  bool get stopAfterCurrent => _stopAfterCurrent;
+
+  void toggleStopAfterCurrent() {
+    _stopAfterCurrent = !_stopAfterCurrent;
+    notice = _stopAfterCurrent ? '这首放完就停止播放' : '「播完这首就停」已经取消';
     noticeTick++;
     notifyListeners();
   }
@@ -1226,6 +1404,9 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       PlayMode.random => PlayMode.none,
       PlayMode.none => PlayMode.list,
     };
+    // 存下来：这个选择是关于「她平时怎么听」的，不是这一次队列的。以前只活在内存里，
+    // 想用随机听一整晚，每次重开应用都得先点回随机。
+    AppSettings.instance.setPlayMode(playMode.name);
     notifyListeners();
   }
 
@@ -1283,6 +1464,13 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> applyPreset(EqPreset preset) async {
     try {
       final params = await _eq.parameters.timeout(const Duration(seconds: 3));
+      if (params.bands.isEmpty) {
+        // 一台机上的均衡器有 0 个频段是有可能的（某些定制 ROM 就这样）：
+        // 这时候「启用」按下去只会静默成功，什么都不会变。
+        eqError = '这台机的均衡器没有给出任何频段，预设挂不上去';
+        notifyListeners();
+        return;
+      }
       await _eq.setEnabled(true);
       final gains = _resampleGains(preset.gains, params.bands.length);
       for (var i = 0; i < params.bands.length; i++) {
@@ -1291,18 +1479,28 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       }
       eqPresetName = preset.name;
       eqGains = gains;
+      eqError = null;
       AppSettings.instance.setEqPreset(preset.name);
       notifyListeners();
-    } catch (_) {}
+    } catch (e) {
+      // 原来这里整个吞掉：开关自己弹回去就算「失败了」，
+      // 到底是手机不让挂、还是系统那条通道没应答，屏幕上没有任何说法。
+      eqError = '这一档音效没能挂上：${humanizeError(e)}';
+      notifyListeners();
+    }
   }
 
   Future<void> disableEq() async {
     try {
       await _eq.setEnabled(false);
       eqPresetName = '关闭';
+      eqError = null;
       AppSettings.instance.setEqPreset('关闭');
       notifyListeners();
-    } catch (_) {}
+    } catch (e) {
+      eqError = '没能关掉均衡器：${humanizeError(e)}';
+      notifyListeners();
+    }
   }
 
   /// 重启后第一次真正接上音源时，把存下来的预设补回去。

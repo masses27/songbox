@@ -54,7 +54,9 @@ class _SheetDetailPageState extends State<SheetDetailPage> {
   /// 歌单以前一次只取前 80 首，长歌单听一半就没了。现在按页取，滑到底自动接上。
   Future<void> _load({bool refresh = false}) async {
     setState(() {
-      _loading = true;
+      // 屏幕上已经有一屏歌就别把整页换成转圈：下拉刷新换来的是「先空一下」，
+      // 比刷新本身慢不慢更难受，也害她以为点错了什么。
+      _loading = _songs.isEmpty;
       _error = null;
       _moreError = null;
     });
@@ -72,6 +74,9 @@ class _SheetDetailPageState extends State<SheetDetailPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = humanizeError(e));
+      // 旧列表还在的时候那句错误没有地方显示（错误块只在空列表时出现），
+      // 不吭一声的话「下拉刷新」看起来就是没反应。
+      if (_songs.isNotEmpty) toast(context, '这个歌单没刷新下来：${humanizeError(e)}');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -136,7 +141,10 @@ class _SheetDetailPageState extends State<SheetDetailPage> {
       body: RefreshIndicator(
         onRefresh: () => _load(refresh: true),
         child: _loading
-            ? ListView(children: const [SizedBox(height: 160), Center(child: CircularProgressIndicator())])
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [SizedBox(height: 160), Center(child: CircularProgressIndicator())],
+              )
             : ListView(
                 controller: _scroll,
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -211,29 +219,44 @@ class _SheetDetailPageState extends State<SheetDetailPage> {
 
   Widget _footer() {
     if (_moreError != null) {
+      final left = _total - _songs.length;
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('还有 ${_total - _songs.length} 首没加载出来',
+            Text(left > 0 ? '还有 $left 首没加载出来' : '后面那页没加载出来',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             TextButton(onPressed: _loadMore, child: const Text('重试')),
           ],
         ),
       );
     }
-    if (_loadingMore || _hasMore) {
+    if (_loadingMore) {
       return const Padding(
         padding: EdgeInsets.all(16),
         child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
       );
     }
-    if (!_hasMore && _total > 0 && _songs.length >= _total) {
+    if (_hasMore) {
+      // 滑到离底 400 以内会自动接下一页，可歌单短到一屏就装完时那条触发永远等不到人，
+      // 于是页脚就停在一根转个不停的圈上。给一颗点得到的键，转圈只在真在加载时出现。
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: Center(
+          child: TextButton.icon(
+            onPressed: _loadMore,
+            icon: const Icon(Icons.expand_more, size: 18),
+            label: Text('接着加载后面那些', style: const TextStyle(fontSize: 12)),
+          ),
+        ),
+      );
+    }
+    if (_songs.isNotEmpty) {
       // 到底要给句话，不然她一直往下滑，以为还有。
       return Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        child: Text('已全部加载 · 共 ${_songs.length} 首',
+        child: Text('已经到底 · 共 ${_songs.length} 首',
             textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
       );
     }

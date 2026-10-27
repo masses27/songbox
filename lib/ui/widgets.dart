@@ -12,6 +12,7 @@ import '../util/art_url.dart';
 import '../util/humanize.dart';
 import 'pages/builtin_library.dart';
 import 'pages/search_page.dart';
+import 'pages/sources_page.dart';
 import 'theme.dart';
 
 /// Shared NetEase-Cloud-Music-style building blocks.
@@ -268,6 +269,9 @@ class VipScanBar extends StatefulWidget {
 
 class _VipScanBarState extends State<VipScanBar> {
   bool _running = false;
+
+  /// 按下「停止」到那一轮真正退出之间还有一批在飞，所以界面先改口、后台按这个标记收尾。
+  bool _stop = false;
   int _done = 0;
   String? _result;
 
@@ -280,19 +284,23 @@ class _VipScanBarState extends State<VipScanBar> {
 
   Future<void> _scan() async {
     if (_running) return;
+    _stop = false;
     setState(() {
       _running = true;
       _done = 0;
       _result = null;
     });
     try {
+      // cancelled 那一头是逐批检查的：按停止后最多再跑完手上那一首。
       final r = await BuiltinLibrary.instance.scanVipSongs(widget.songs, onProgress: (d, _) {
         if (mounted) setState(() => _done = d);
-      });
+      }, cancelled: () => _stop);
       if (!mounted) return;
-      setState(() => _result = r.total == 0
-          ? '这里的会员歌都已经处理过了'
-          : '${r.fixed} 首已备好免费版 · ${r.dead} 首确实没有');
+      setState(() => _result = _stop
+          ? '半路停了 · 查了 ${r.fixed + r.dead} 首，其中 ${r.fixed} 首已备好免费版'
+          : r.total == 0
+              ? '这里的会员歌都已经处理过了'
+              : '${r.fixed} 首已备好免费版 · ${r.dead} 首确实没有');
     } catch (e) {
       if (mounted) setState(() => _result = '体检没跑完：${humanizeError(e)}');
     } finally {
@@ -325,11 +333,17 @@ class _VipScanBarState extends State<VipScanBar> {
               style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
             ),
           ),
-          if (_running)
+          if (_running) ...[
             const SizedBox(
-                width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-          // 体检按下去会连着发几十次搜索，一首一首撞墙时她随时可以反悔，
-          // 但整单跑完（todo==0）就没必要再按了。
+                width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+            // 体检按下去会连着发几十次搜索，一首一首撞墙时她随时可以反悔。
+            // 原来这一句只写在注释里：转圈一旦开始，屏幕上没有任何一只手能停下它。
+            TextButton(
+              onPressed: _stop ? null : () => setState(() => _stop = true),
+              child: Text(_stop ? '正在停…' : '停止', style: const TextStyle(fontSize: 13)),
+            ),
+          ]
+          // 整单跑完（todo==0）就没必要再按了。
           else if (todo > 0)
             TextButton(
                 onPressed: _scan,
@@ -369,6 +383,11 @@ class SongListRow extends StatelessWidget {
     // 只订阅自己这一行的收藏状态：watch<LibraryStore>() 会让整列表在
     // 任意收藏/最近播放变化时重建。
     final fav = context.select<LibraryStore, bool>((s) => s.isFavorite(song));
+    // 角标这两格也得各自订阅。以前这里是直接读 `LibraryStore.instance`：扫描完成后
+    // 曲库notifyListeners了，可这一行只跟着「收藏」「在播」两个值重建，于是
+    // 「已找到免费版」永远要等她滚出去再滚回来才改口——明明数据已经落盘了。
+    final swapReady = context.select<LibraryStore, bool>((s) => s.hasSwapSong(song));
+    final offline = context.select<LibraryStore, bool>((s) => s.hasLocalFile(song));
     // 「正在播的这一首」同理。以前由列表算好传进来：那些列表都是父级一个 context
     // 里循环 select 的，一次切歌要么整列表重建，要么标记落在别的行为上——几百首的歌单
     // 每几秒整表重建一次，滚动时看得见掉帧。
@@ -416,8 +435,8 @@ class SongListRow extends StatelessWidget {
         children: [
           ?extraTrailing,
           if (song.twinBlocked)
-            Padding(padding: const EdgeInsets.only(right: 5), child: VipBadge(ready: store.hasSwapSong(song))),
-          if (store.hasLocalFile(song))
+            Padding(padding: const EdgeInsets.only(right: 5), child: VipBadge(ready: swapReady)),
+          if (offline)
             Padding(
               padding: EdgeInsets.only(right: 2),
               child: Icon(Icons.offline_pin_outlined, size: 15, color: AppTheme.textSecondary),
@@ -612,9 +631,9 @@ Future<void> deleteLocalSong(BuildContext context, Song song) async {
   final ok = await confirmAction(context,
       title: '删除本地文件', message: '删除后这首歌回到在线播放，想再离线听需要重新下载。');
   if (!ok || !context.mounted) return;
-  await DownloadManager.instance.deleteDownload(song);
+  final done = await DownloadManager.instance.deleteDownload(song);
   if (!context.mounted) return;
-  toast(context, '已删除本地文件');
+  toast(context, done ? '已删除本地文件' : '这个文件正被占用，没删掉；列表里先给你留着');
 }
 
 /// 「找其他版本」：一首歌卡在会员墙后面时，同一首歌在网易云往往还留着一条免费的
@@ -701,9 +720,37 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
                   }
                   final found = snap.data ?? const <Song>[];
                   if (found.isEmpty) {
-                    return const EmptyState(
-                      icon: Icons.music_off_outlined,
-                      message: '没找到同一首歌的其他版本\n到搜索页换个关键词，或在「音源」页启用别的音源',
+                    // 原来这里只写「到搜索页换个关键词，或在「音源」页启用别的音源」——
+                    // 两个去处都得她自己退出去找。按钮直接放在这一格上。
+                    return Column(
+                      children: [
+                        const EmptyState(
+                          icon: Icons.music_off_outlined,
+                          message: '没找到同一首歌的其他版本\n可以换个关键词搜搜看，或者看看还有哪个曲库能开',
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 20),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              FilledButton.tonal(
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    SearchPage.open(context, widget.song.name);
+                                  },
+                                  child: const Text('去搜索')),
+                              const SizedBox(width: 10),
+                              OutlinedButton(
+                                  onPressed: () {
+                                    Navigator.pop(ctx);
+                                    Navigator.push(context,
+                                        MaterialPageRoute(builder: (_) => const SourcesPage()));
+                                  },
+                                  child: const Text('音源页')),
+                            ],
+                          ),
+                        ),
+                      ],
                     );
                   }
                   return ListView.builder(
@@ -799,14 +846,23 @@ Future<void> pickPlaylist(BuildContext context, Song song) => showModalBottomShe
       builder: (_) => _PlaylistPicker(song: song),
     );
 
-class _PlaylistPicker extends StatelessWidget {
+class _PlaylistPicker extends StatefulWidget {
   final Song song;
   const _PlaylistPicker({required this.song});
 
   @override
+  State<_PlaylistPicker> createState() => _PlaylistPickerState();
+}
+
+class _PlaylistPickerState extends State<_PlaylistPicker> {
+  /// 这一张面板是盖在页面之上的浮层：ScaffoldMessenger 那条提示会被它挡住，
+  /// 所以「加进去了没有」只能写在面板里面还她看。
+  String? _note;
+
+  @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
-    final mine = store.playlistsOf(song);
+    final mine = store.playlistsOf(widget.song);
     return SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -825,12 +881,20 @@ class _PlaylistPicker extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(song.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(widget.song.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                ),
+                if (_note != null)
+                  Text(_note!,
+                      style: TextStyle(fontSize: 12, color: AppTheme.primary)),
+              ],
             ),
           ),
           Divider(height: 1, color: AppTheme.divider),
@@ -849,11 +913,16 @@ class _PlaylistPicker extends StatelessWidget {
                     subtitle: Text('${p.songs.length} 首',
                         style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                     onChanged: (on) {
-                      if (on == true) {
-                        store.addToPlaylist(p.id, song);
-                      } else {
-                        store.removeFromPlaylist(p.id, song);
-                      }
+                      setState(() {
+                        if (on == true) {
+                          _note = store.addToPlaylist(p.id, widget.song)
+                              ? '已加入「${p.name}」'
+                              : '「${p.name}」里已经有这一首';
+                        } else {
+                          final at = store.removeFromPlaylist(p.id, widget.song);
+                          _note = at >= 0 ? '已从「${p.name}」移出' : null;
+                        }
+                      });
                     },
                   ),
                 ListTile(
@@ -881,7 +950,8 @@ class _PlaylistPicker extends StatelessWidget {
     );
     if (name == null || name.trim().isEmpty) return;
     final created = store.createPlaylist(name);
-    store.addToPlaylist(created.id, song);
+    store.addToPlaylist(created.id, widget.song);
+    if (mounted) setState(() => _note = '已新建「${created.name}」并把这首放进去');
   }
 }
 
@@ -937,7 +1007,7 @@ Future<void> requestDownload(BuildContext context, Song song) async {
     final ok = await confirmAction(
       context,
       title: '开始下载',
-      message: '将以 $tier 下载「${song.name}」。\n'
+      message: '将以 ${qualityLabel(tier)} 下载「${song.name}」。\n'
           '${tier == 'flac' ? '无损格式一首可达 30 MB 以上，' : ''}移动网络下会消耗流量。',
       confirmLabel: '下载',
     );
@@ -946,8 +1016,24 @@ Future<void> requestDownload(BuildContext context, Song song) async {
   final started = await dm.enqueue(song);
   if (!context.mounted) return;
   // 已经在下的那一首不会重新排队，这时候说「已开始下载」就是骗人。
-  toast(context, started ? '已开始下载，进度在「我的」页可见' : '这首已经在下载中了');
+  // 「进度在我的页可见」是一句指路的话、不是一个能按的东西：手边直接给一颗「取消」，
+  // 按错了要撤这一笔，不该让她追到另一个页面去找那个下载条。
+  final id = '${song.source}:${song.songmid}';
+  DownloadTask? task;
+  for (final t in dm.tasks) {
+    if (t.id == id) task = t;
+  }
+  toast(
+    context,
+    started ? '已开始下载 ${task?.quality ?? settings.quality}' : '这首已经在下载中了',
+    actionLabel: task == null ? null : '取消',
+    onAction: task == null ? null : () => dm.cancel(task!),
+  );
 }
+
+/// 上一条「带按钮的提示」还挂在屏上的截止时间。全局一个就够：提示条本来也是
+/// 全局只有一个 ScaffoldMessenger 在排。
+DateTime? _actionToastUntil;
 
 /// 一句话提示。收藏/排队这类操作点了没有别的可见变化，不吭一声她分不清
 /// 是没生效还是没点上。可选一个「撤销」动作。
@@ -958,17 +1044,27 @@ Future<void> requestDownload(BuildContext context, Song song) async {
 void toast(BuildContext context, String text, {String? actionLabel, VoidCallback? onAction}) {
   if (!context.mounted) return;
   final hasAction = actionLabel != null && onAction != null;
-  ScaffoldMessenger.of(context)
-    ..clearSnackBars()
-    ..showSnackBar(SnackBar(
-      content: Text(text),
-      duration: Duration(seconds: hasAction ? 4 : 2),
-      behavior: SnackBarBehavior.floating,
-      // 播放条现在是真正的 bottomNavigationBar，Scaffold 会把提示抬到它上面，
-      // 这里只留 12 的呼吸距离；再留 84 就会浮到列表中间。
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      action: hasAction ? SnackBarAction(label: actionLabel, onPressed: onAction) : null,
-    ));
+  final messenger = ScaffoldMessenger.of(context);
+  // 带按钮的那条是要她读完再决定的，压到最前面，屏幕上原来那条让路。
+  // 反过来，一句普通提示不该把带按钮的那条挤掉：那 4 秒里她可能正读到「换版本」，
+  // 手还没抬起来，按钮就没了 —— 以前每次 clearSnackBars 干的都是这件事。
+  final actionableStillUp =
+      _actionToastUntil != null && DateTime.now().isBefore(_actionToastUntil!);
+  if (hasAction || !actionableStillUp) messenger.clearSnackBars();
+  if (hasAction) {
+    _actionToastUntil = DateTime.now().add(const Duration(seconds: 4));
+  } else if (!actionableStillUp) {
+    _actionToastUntil = null;
+  }
+  messenger.showSnackBar(SnackBar(
+    content: Text(text),
+    duration: Duration(seconds: hasAction ? 4 : 2),
+    behavior: SnackBarBehavior.floating,
+    // 播放条现在是真正的 bottomNavigationBar，Scaffold 会把提示抬到它上面，
+    // 这里只留 12 的呼吸距离；再留 84 就会浮到列表中间。
+    margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+    action: hasAction ? SnackBarAction(label: actionLabel, onPressed: onAction) : null,
+  ));
 }
 
 /// 三行摘要，点一下展开全文（歌单 / 专辑简介用）。
