@@ -69,7 +69,7 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 - 数据落在 exe 旁边的 `data/`（`lib/util/app_paths.dart`）。桌面版 `getApplicationDocumentsDirectory()` 返回的是用户的「文档」根目录，不收敛就会把 `settings.json`、`library/`、`logs/`、`sources/` 全撒进她的文档里；`data/` 跟着包走，U 盘拷一份就是完整一套。旁边写不动时才退回应用支持目录。安卓落点不变。注意这个 `data/` 跟 Flutter 自己那个 `data/`（`app.so`、`flutter_assets`、`icudtl.dat`）是同一个目录，我们的 `logs/`、`library/` 就并排躺在引擎资源旁边——能用，但不体面，日后想分开就改 `AppPaths._desktopRoot()` 那一个名字。
 - 安卓专属那几样在桌面上直接绕开，不去试：系统均衡器（`AndroidEqualizer` 走 MethodChannel）、下拉菜单那张播放卡的整条自检与接桥。均衡器那一页里「这台设备没有提供系统均衡器」那句就是给桌面版的。
 - 已知短处：lx-music 音源脚本在桌面上激活会超时（QuickJS 那条桥，日志里那句「音源脚本激活失败」就是它），能出声的是四个端内直连；桌面上也没有媒体会话，切歌只能回应用里点。
-- 验到哪一步了：0.8.35 那个包在本机起得来、界面和封面都正常，`libmpv-2.dll` 确实加载进了进程，旧版那句 `MissingPluginException(… just_audio.methods)` 不再出现，数据也确实落在 `data/` 而没碰「文档」。**但还没真的点过一次播放**——出声与否要看的证据是 `data/logs/play-<日期>.log` 里那句 `[播]`（旧版在那一步只会留 `[崩]`）。在那之前，「桌面版能放整首」只能算推断，不算实测。
+- 验到哪一步了：0.8.35 那个包在本机起得来、界面和封面都正常，`libmpv-2.dll` 确实加载进了进程，旧版那句 `MissingPluginException(… just_audio.methods)` 不再出现，数据也确实落在 `data/` 而没碰「文档」。播放也真点过了：`data/logs/play-2026-10-27.log` 里三行 `[播]`（一首 B 站 192k、两首提前备好的 320k），队列自己往下走，`library/play_stats.json` 记到「阿刁」听到 371 秒（全长 374）并算完播、「米店」336 秒算完播——那是播放位置一路推进出来的数，不是点一下就能伪造的。`[崩]` 一条没有。剩最后一格没勾：耳机里到底有没有声，只有她耳朵能判。
 
 ## 测试
 
