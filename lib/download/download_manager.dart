@@ -23,9 +23,19 @@ class DownloadManager extends ChangeNotifier {
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 15),
+    // 只管到「响应头回来」那一下：dio 的 receiveTimeout 是套在 request.close() 上的
+    // （dio 5.11 的 io_adapter.dart:162），字节流开始往这边吐之后它一概不管。
+    // 半途断流靠下面 [_stallTimeout] 那一层；这一行只管「请求发出去了、响应头迟迟
+    // 不回来」那一段，给到 5 分钟不误伤慢站。
     receiveTimeout: const Duration(minutes: 5),
     responseType: ResponseType.stream,
   ));
+
+  /// 连续这么多秒没收到一个新块，就当这条连接已经死了。
+  ///
+  /// 少了这一层，CDN 半路不回话时 `await for` 永远挂着：任务停在 running、进度条
+  /// 冻在当前这一格，界面上既没有失败也没有完成 —— 她只能把应用整个关掉。
+  static const _stallTimeout = Duration(seconds: 30);
 
   final Map<String, DownloadTask> _tasks = {};
   List<DownloadTask> get tasks => List.unmodifiable(_tasks.values);
@@ -76,7 +86,7 @@ class DownloadManager extends ChangeNotifier {
               notifyListeners();
             }
           });
-      await for (final chunk in resp.data!.stream) {
+      await for (final chunk in resp.data!.stream.timeout(_stallTimeout)) {
         sink.add(chunk);
       }
       await sink.close();
@@ -92,6 +102,12 @@ class DownloadManager extends ChangeNotifier {
       }
       task.done = true;
       LibraryStore.instance.recordLocalPath(task.song, file.path);
+    } on TimeoutException {
+      // 两处 30 秒抛的是同一种异常，可卡在哪儿得说哪句话：`resolveUrl` 那一段是
+      // 还没开始下，字节流那一段才是下到一半没回来。进度条别再冻在当前那一格。
+      task.error = task.targetFile == null
+          ? '问那个平台要地址要了半天没回话，重试会再问一次'
+          : '下到一半没动静了，重试会从头重下这一首';
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
         // A cancelled partial file is useless — drop it.

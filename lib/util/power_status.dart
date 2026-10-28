@@ -87,7 +87,10 @@ class PowerStatus {
 
   static Future<Object?> _ask(String method) async {
     try {
-      return await _ch.invokeMethod(method);
+      // 原生那一侧卡在系统服务上时（ROM 的通知管理没回话），这条 ask 会一直悬着，
+      // 而等它的人是「接桥」「查播放卡」那两条自己排的班：一悬就再也不会排下一班，
+      // 界面上什么异常都看不到。问不到就按问不到办，别把那条路钉死。
+      return await _ch.invokeMethod(method).timeout(const Duration(seconds: 5));
     } catch (_) {
       return null;
     }

@@ -29,10 +29,17 @@ class AudioPrefetch {
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 10),
-    // 一首歌的体量，45 秒还没写完就是网络不行，别拖到下一首都开始播了还在下。
+    // 这一项只管到「响应头回来」那一刻：dio 的 receiveTimeout 是套在 request.close()
+    // 上的（dio 5.11 的 io_adapter.dart:162），字节流开始往这边吐之后它就不管了。
+    // 半途断流真正靠的是下面 [_stallTimeout] 那一层，别把这行当成总闸。
     receiveTimeout: const Duration(seconds: 45),
     responseType: ResponseType.stream,
   ));
+
+  /// 字节流连续这么多秒不给一个新块就按「这条连接已经死了」收摊。
+  /// 少了这一层，CDN 半路不回话时 `await for` 永远挂着：预取那个坑位（[_running]）
+  /// 从此占着，这一首再也预取不上，磁盘上还留着写了一半的 .part。
+  static const _stallTimeout = Duration(seconds: 30);
 
   /// 已完成下载 键 -> 文件路径。目录里现成的文件在第一次用到时扫进来。
   final Map<String, String> _done = {};
@@ -194,7 +201,7 @@ class AudioPrefetch {
       var written = 0;
       var giveUp = false;
       try {
-        await for (final chunk in body.stream) {
+        await for (final chunk in body.stream.timeout(_stallTimeout)) {
           written += chunk.length;
           // 超大文件不值得为「可能用一次」先下满，剩下的交给在线播。
           if (written > maxOneFileBytes) {
