@@ -14,7 +14,7 @@
 
 放不出时先降一档音质，再去四个源里找同一首歌（`lib/ui/pages/builtin_library.dart`，端内可取的四个源写死在 `inAppSources`）。「确认没有免费版」这个判定只在接口明确答「没有」时才落盘；断网、被风控一律算「这次问得不凑巧」，不会把一首好歌跳过一周。
 
-0.8.41 删掉了 lx-music v2.0.0 音源脚本那一整层（QuickJS 沙箱、8 个内置脚本、音源管理页、自动更新）。留着的唯一理由是「酷我独占曲目还能靠脚本出整首」，而那一层自己那条路早就断了：内置 8 个后端逐个探过、还能出链的没几个，App 里的「全部更新」只能换新脚本文件、救不了已经下架的接口；桌面上每次冷启动都记一行「音源脚本激活失败（20 秒内没有就绪）」。删掉之后酷我的歌照样能听——去别的曲库找同一首，那条路本来就在；顺手撤掉的是酷我占着的那一格换源名额（候选最多两条）和「找其他版本」里那一条点下去没声音的候选。代价是以后再接第三方曲库要自己写端内模块；换来的是 0.8.39 那份 arm64 APK 里 1,050,688 字节的 `libfastdev_quickjs_runtime.so` 和 `assets/js` 那 473,036 字节（引导 + 8 个脚本）一并没了。
+0.8.41 删掉了 lx-music v2.0.0 音源脚本那一整层（QuickJS 沙箱、8 个内置脚本、音源管理页、自动更新）。留着的唯一理由是「酷我独占曲目还能靠脚本出整首」，而那一层自己那条路早就断了：内置 8 个后端逐个探过、还能出链的没几个，App 里的「全部更新」只能换新脚本文件、救不了已经下架的接口；桌面上每次冷启动都记一行「音源脚本激活失败（20 秒内没有就绪）」。删掉之后酷我的歌照样能听——去别的曲库找同一首，那条路本来就在；顺手撤掉的是酷我占着的那一格换源名额（候选最多两条）和「找其他版本」里那一条点下去没声音的候选。代价是以后再接第三方曲库要自己写端内模块；换来的是 0.8.39 那份 arm64 APK 里 1,050,688 字节的 `libfastdev_quickjs_runtime.so` 和 `assets/js` 那 473,036 字节（引导 + 8 个脚本）一并没了。桌面那份同理：payload 里 677,376 字节的 `quickjs_c_bridge.dll` 和 86,528 字节的 `flutter_js_plugin.dll` 一起消失，单文件那颗从 21,849,150 变成 21,214,557，装机包里搜不到任何一个脚本文件名。
 
 ## 功能
 
@@ -87,7 +87,7 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 
 构建走 GitHub Actions：仓库的 Actions 页 → `windows-portable` → Run workflow（`.github/workflows/windows-portable.yml`，只有 `workflow_dispatch`，一次出两份产物：`songbox-<version>-windows-x64-portable.zip` 和 `songbox-<version>-windows-x64-single.exe`）。
 
-产物发在对应版本的 Release 上（tag 是 `v<版本号>`，文件名一律 ASCII —— Release 的直链会把中文名削掉）。桌面当前以 v0.8.38 那两颗为准：v0.8.37 的 Release 上原本也挂了这两颗，已撤下，就是上面那个 `const []` 的坑在未落过库文件的机器上每首都放不出，那版只剩 APK；已经装过桌面版的直接覆盖成新 exe。仓库是私有的，`github.com/…/releases/download/…` 那条直链不带登录态会回 `Not Found`，脚本取产物走 API（`GET /repos/masses27/songbox/releases/assets/<id>` 配 `Accept: application/octet-stream`）。上传同理不能用 `api.github.com` 那条路径（404），要用创建 Release 回包里的 `upload_url` —— 它指向 `uploads.github.com`，尾巴上挂着 `{?name,label}` 模板，得自己去掉模板占位、拼上 `?name=<ascii名>` 再 POST。
+产物发在对应版本的 Release 上（tag 是 `v<版本号>`，文件名一律 ASCII —— Release 的直链会把中文名削掉）。桌面当前以 v0.8.41 那两颗为准（v0.8.39 只发过 POPO，没建 Release；v0.8.38 那两颗仍在原来的 Release 上，是上面那个 `const []` 的坑修好之后的第一版）。已经装过桌面版的直接覆盖成新 exe。仓库是私有的，`github.com/…/releases/download/…` 那条直链不带登录态会回 `Not Found`，脚本取产物走 API（`GET /repos/masses27/songbox/releases/assets/<id>` 配 `Accept: application/octet-stream`）。上传同理不能用 `api.github.com` 那条路径（404），要用创建 Release 回包里的 `upload_url` —— 它指向 `uploads.github.com`，尾巴上挂着 `{?name,label}` 模板，得自己去掉模板占位、拼上 `?name=<ascii名>` 再 POST。
 
 必须在 Actions 上编，本机编不了：`flutter build windows` 要能建符号链接，而这台机的账号既没有 `SeCreateSymbolicLinkPrivilege`，开发者模式也开不了（要写 `HKLM\...\AppModelUnlock`，得管理员）。runner 上这两条现成。
 
@@ -103,9 +103,9 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 
 ## Windows 单文件版
 
-zip 那份要用，就得一直留着那个文件夹：她桌面要么堆一层目录，要么放个快捷方式指进去。单文件那份把这些都省了——桌面永远只有 `听歌小窝.exe` 一颗（0.8.38 实测 20.8MB），双击就完事。
+zip 那份要用，就得一直留着那个文件夹：她桌面要么堆一层目录，要么放个快捷方式指进去。单文件那份把这些都省了——桌面永远只有 `听歌小窝.exe` 一颗（0.8.41 实测 20.2MB），双击就完事。
 
-做法是启动器 + 尾巴：`tool/win_single/launcher.cs` 用 runner 上现成的 `csc.exe`（.NET Framework 4.8 自带，不额外装东西）编成一颗 211KB 的 exe，再把 zip 那一份整个接在它尾巴上。PE 只看头部那些节，尾巴上的字节当资源多余的部分忽略，所以这文件既是能跑的程序又是一份完整 zip；启动器按 zip 自己的 EOCD 往回算出尾巴起点（`blobStart = eocd绝对位置 - 中央目录长度 - 中央目录起始偏移`），把 blob 切出来解到 `%LOCALAPPDATA%\听歌小窝\`，再从那儿拉起 `lyric_music.exe`。payload 是 38 个条目（31 个文件 + 7 个目录项，压缩 20.6MB、解出来 47.2MB），第一次解压实测一秒左右；之后版本号和 `songbox-version.txt` 那枚戳记一致就直接跳过解压。
+做法是启动器 + 尾巴：`tool/win_single/launcher.cs` 用 runner 上现成的 `csc.exe`（.NET Framework 4.8 自带，不额外装东西）编成一颗 211KB 的 exe，再把 zip 那一份整个接在它尾巴上。PE 只看头部那些节，尾巴上的字节当资源多余的部分忽略，所以这文件既是能跑的程序又是一份完整 zip；启动器按 zip 自己的 EOCD 往回算出尾巴起点（`blobStart = eocd绝对位置 - 中央目录长度 - 中央目录起始偏移`），把 blob 切出来解到 `%LOCALAPPDATA%\听歌小窝\`，再从那儿拉起 `lyric_music.exe`。payload 是 23 个条目（19 个文件 + 4 个目录项，压缩 20.0MB、解出来 45.8MB），第一次解压实测一秒左右；之后版本号和 `songbox-version.txt` 那枚戳记一致就直接跳过解压。（0.8.38 那一份是 38 个条目、压缩 20.6MB、解出来 47.2MB——少的 15 项正是脚本层那一整摊：9 个脚本、`flutter_js_plugin.dll`、`quickjs_c_bridge.dll` 和它们那几个目录项。尾巴是逐字节接上去的：单文件 21,214,557 = 启动器 215,552 + 免安装 zip 20,999,005，两颗说的同一件事。）
 
 几条写死了的理由：
 
