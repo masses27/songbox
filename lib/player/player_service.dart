@@ -842,7 +842,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       busy = false;
       notifyListeners();
       await _ap.play();
-    } catch (e) {
+    } catch (e, st) {
       if (gen != _generation) return;
       // 本机那份开不出来：这一条跟网络、跟地址都没关系，绕开它重放一次才对。
       // 原来它走的是下面「网络断了」那一趟，对着一份打不开的文件等满四轮，
@@ -870,6 +870,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       // 一路跳歌时只报第一次：现在一首失败到下一首只要一秒多，每首都弹一条
       // 就成了刷屏。播放页上那句错误说明照旧留着。
       if (_failStreak == 0) errorTick++;
+      // 这句人话背后如果是程序自己的错，抄回来的就只有「取不到声音」四个字，谁也猜不到
+      // 是哪一行踩的（新机器上每首歌都放不出，真凶是记「最近播放」那一句）。同一串跳歌
+      // 只留第一首的栈，规矩和上面那句「只报第一次」一样。
+      if (_failStreak == 0 && isOwnBug(e)) AppLog.add('崩', '取证 · ${AppLog.ownFrames(st)}');
       _scheduleAutoSkip(gen);
     } finally {
       if (gen == _generation) {

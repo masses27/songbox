@@ -60,13 +60,13 @@ Future<void> main() async {
   ]);
   AppLog.add('起', '听歌小窝 v${AppSettings.appVersion} 启动');
   // 崩溃和「歌自己停了」是她最没法转述的一种现象：留下最后一根线索，比事后追问
-  // 「当时屏幕上写了什么」有用得多。只记类型和头一句，栈太长会把日志页挤满。
+  // 「当时屏幕上写了什么」有用得多。只记类型、头一句再加我们自己那几帧，整罐栈会把日志页挤满。
   FlutterError.onError = (details) {
-    AppLog.add('崩', details.exceptionAsString());
+    _logCrash(details.exceptionAsString(), details.stack);
     FlutterError.presentError(details);
   };
   WidgetsBinding.instance.platformDispatcher.onError = (e, s) {
-    AppLog.add('崩', '$e');
+    _logCrash('$e', s);
     return false;
   };
   PlayerService.instance
@@ -115,6 +115,14 @@ Future<void> _boot(String what, Future<void> Function() run) async {
     BootFailures.add('$what没读出来（这一块的记录这次是空的）');
     AppLog.add('起', '$what初始化失败：$e');
   }
+}
+
+/// 崩的那一句后面跟我们自己的那几帧。只写「Unsupported operation: Cannot remove from an
+/// unmodifiable list」时，屏幕上那句没告诉她是谁踩的，日志里也翻不出是哪个文件没落盘 ——
+/// 而她能转述的只有这一句。
+void _logCrash(String what, StackTrace? st) {
+  final frames = AppLog.ownFrames(st);
+  AppLog.add('崩', frames.isEmpty ? what : '$what · $frames');
 }
 
 class LyricApp extends StatefulWidget {

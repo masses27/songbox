@@ -101,7 +101,7 @@ class LibraryStore extends ChangeNotifier {
     }
     if (_rootOk) {
       for (final kind in LibraryKind.values) {
-        _by[kind] = _songsFrom(JsonFile.read(_file(kind)), kind.name);
+        _by[kind] = songsFrom(JsonFile.read(_file(kind)), kind.name);
       }
       final j = JsonFile.read(_pathsFile);
       if (j is Map) {
@@ -132,8 +132,13 @@ class LibraryStore extends ChangeNotifier {
   ///
   /// 原来整表 `map` 外面一个 try 都没有，一条写坏的记录就把这一整份带崩 ——
   /// 冷启动那一趟抛出去之后她看到的是「收藏全空了」，而不只是少了一行。
-  static List<Song> _songsFrom(Object? raw, String what) {
-    if (raw is! List) return const [];
+  ///
+  /// 交出去的那一份是 `_by` 里被就地增删的底账，所以空的时候也必须是能改的 `[]`：
+  /// 写成 `const []`，新机器（收藏、最近播放、下载都还没落过盘）第一次 recordRecent
+  /// 就抛 `Cannot remove from an unmodifiable list`，而那一句正好卡在「地址已经装好、
+  /// 就差开口放」之间 —— 换一条地址还是同样一句，每首都放不出，日志上看着像平台挂了。
+  static List<Song> songsFrom(Object? raw, String what) {
+    if (raw is! List) return <Song>[];
     final out = <Song>[];
     var bad = 0;
     for (final e in raw) {

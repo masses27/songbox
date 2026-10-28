@@ -73,6 +73,12 @@ String humanizeError(Object e) {
   return s.length > 160 ? '${s.substring(0, 160)}…' : s;
 }
 
+/// 程序自己的错 —— 不是网络、也不是平台回的话。这类异常从她那边只会回来一句没法行动的
+/// 英文（`Cannot remove from an unmodifiable list` 就是新机器上每首歌放不出的那句），
+/// 光看文字定不了位，得把栈一起留下。
+bool isOwnBug(Object e) => e is UnsupportedError || e is StateError || e is TypeError ||
+    e is NoSuchMethodError || e is RangeError;
+
 /// 播放量这类大数字：7 位数以上写「万」「亿」，跟网易云一样，
 /// 否则卡片上会出现 12345678 这种没法一眼读的长度。
 String fmtCount(int n) {

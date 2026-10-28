@@ -199,6 +199,28 @@ void main() {
       expect(t, startsWith('听歌小窝 v${AppSettings.appVersion} · 音质 ${AppSettings.instance.quality}'));
       expect(t, contains('----'));
     });
+
+    test('取证行只留自己那几帧，最多三帧', () {
+      final st = StackTrace.fromString([
+        '#0      ListBase.removeWhere (dart:core-patch/array.dart:207:5)',
+        '#1      LibraryStore.recordRecent (package:lyric_music/library/library_store.dart:268:10)',
+        '#2      PlayerService.playAt (package:lyric_music/player/player_service.dart:828:34)',
+        '#3      _RootZone.runUnary (dart:async/zone.dart:864)',
+        '#4      BuiltinLibrary.resolveUrl (package:lyric_music/ui/pages/builtin_library.dart:190:5)',
+        '#5      main (package:lyric_music/main.dart:70:3)',
+      ].join('\n'));
+      expect(AppLog.ownFrames(st), [
+        'LibraryStore.recordRecent (package:lyric_music/library/library_store.dart:268:10)',
+        'PlayerService.playAt (package:lyric_music/player/player_service.dart:828:34)',
+        'BuiltinLibrary.resolveUrl (package:lyric_music/ui/pages/builtin_library.dart:190:5)',
+      ].join(' ← '));
+    });
+
+    test('栈里一句我们的都没有时交白，不硬凑取证行', () {
+      final foreign = StackTrace.fromString('#0      Player.stop (package:media_kit/src/player/player.dart:88)');
+      expect(AppLog.ownFrames(foreign), '');
+      expect(AppLog.ownFrames(null), '');
+    });
   });
 
   group('听歌计数', () {
@@ -266,6 +288,37 @@ void main() {
         expect(s, isNotNull, reason: '$src 倒不回来');
         expect(s!.source, src);
       }
+    });
+  });
+
+  // 读出来的那一份列表就是 `_by` 里后面被就地增删的底账，所以「空」也必须是能改的空。
+  // 写成 `const []` 时只有新机器会踩：收藏、最近播放、下载三份文件都还没落过盘，
+  // 第一次记最近播放当场抛 `Cannot remove from an unmodifiable list` —— 那一句正好卡在
+  // 「地址已经装好、就差开口放」中间，换一条地址还是同样一句，屏幕上就是每首都放不出，
+  // 日志看着像平台挂了（0.8.36 在另一台电脑上就是这样，本机因为有旧的 recent.json 一直没露）。
+  group('库文件还没落盘时读出来的那一份', () {
+    final one = Song(source: 'wy', songmid: 'a', name: '晴天');
+
+    test('空的那份照样能增、能删、能排序', () {
+      for (final raw in [null, '整份读坏了', <Map<String, dynamic>>[]]) {
+        final fresh = LibraryStore.songsFrom(raw, 'recent');
+        expect(fresh, isEmpty);
+        fresh
+          ..insert(0, one)
+          ..removeWhere((e) => e.songmid == 'a')
+          ..add(one)
+          ..sort((a, b) => a.name.compareTo(b.name))
+          ..removeLast();
+        expect(fresh, isEmpty, reason: '$raw 读出来的那份改不动');
+      }
+    });
+
+    test('一行读坏了只丢那一行，其余照常回来', () {
+      final back = LibraryStore.songsFrom([
+        {'source': 'wy', 'songmid': 'a', 'name': '晴天'},
+        '这一行不是歌',
+      ], 'recent');
+      expect(back.map((e) => e.name), ['晴天']);
     });
   });
 }

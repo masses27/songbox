@@ -62,6 +62,17 @@ class AppLog {
     }
   }
 
+  /// 栈里只留我们自己那几帧。第 0 帧永远是 dart 核心的抛点（`ListBase.removeWhere`），
+  /// 说不出是谁踩的；再往下全是插件和框架。三帧足够指到行，又不至于把日志页挤满。
+  static String ownFrames(StackTrace? st) {
+    if (st == null) return '';
+    return st.toString().split('\n')
+        .where((l) => l.contains('package:lyric_music'))
+        .take(3)
+        .map((l) => l.replaceFirst(RegExp(r'^\s*#\d+\s+'), '').trim())
+        .join(' ← ');
+  }
+
   /// 最近这么多行，跨天往前拼。日志文件很小（一天几十行），整读比重排更省事。
   static Future<String> tail({int lines = 400}) async {
     final d = _dir;
