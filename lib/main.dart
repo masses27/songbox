@@ -314,10 +314,18 @@ class _MainShellState extends State<MainShell> {
     (key.currentState as ScrollToTop?)?.scrollToTop();
   }
 
+  /// 首页上的入口跳到别的 tab。「全部榜单」和宫格「排行榜」说的是同一件事，
+  /// 而发现页现在把除官方主榜以外的分组收起来了：只切 tab 的话她看到的还是四张榜，
+  /// 所以顺手把那一块摊开、滚过去。
+  void _openTab(int i) {
+    setState(() => _tab = i);
+    if (i == 1) (_discoverKey.currentState as ShowAllRanks?)?.showAllRanks();
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = [
-      HomePage(key: _homeKey, onOpenTab: (i) => setState(() => _tab = i)),
+      HomePage(key: _homeKey, onOpenTab: _openTab),
       DiscoverPage(key: _discoverKey),
       LibraryPage(key: _libraryKey),
     ];

@@ -48,60 +48,113 @@ class _PlayerBarState extends State<PlayerBar> {
               _ScrubBar(player: player, scrub: _scrub, onScrub: _onScrub),
               GestureDetector(
                 onHorizontalDragEnd: (d) => _swipe(d.primaryVelocity ?? 0, player),
-                child: ListTile(
-                  dense: true,
-                  visualDensity: const VisualDensity(vertical: -1),
-                  leading: _Cover(song: song),
-                  title: Text(
-                    player.busy ? '正在获取播放地址…' : song.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                  subtitle: Text(
-                    // 等重连这一句要常驻：提示条两秒就收，而那后面可能是 15 秒、30 秒。
-                    player.waitNote ?? song.singer,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: player.waitNote == null ? null : AppTheme.primary),
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _TinyButton(
-                        icon: Icons.skip_previous,
-                        tooltip: '上一首',
-                        onPressed: () => player.previous(),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < 440 || MediaQuery.textScalerOf(context).scale(14) > 18;
+                    final details = InkWell(
+                      onTap: () => _openPlayerPage(context),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        child: Row(
+                          children: [
+                            _Cover(song: song),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    player.busy ? '正在获取播放地址…' : song.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                  Text(
+                                    // 等重连这一句要常驻：提示条两秒就收，而那后面可能是 15 秒、30 秒。
+                                    player.waitNote ?? song.singer,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: player.waitNote == null ? AppTheme.textSecondary : AppTheme.primary),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                      IconButton(
-                        iconSize: 30,
-                        visualDensity: VisualDensity.compact,
-                        constraints: const BoxConstraints(minWidth: 42),
-                        padding: EdgeInsets.zero,
-                        onPressed: () => player.togglePlay(),
-                        icon: loading
-                            ? const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(strokeWidth: 2.4, color: AppTheme.primary),
-                              )
-                            : Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_outline,
-                                color: AppTheme.primary),
-                      ),
-                      _TinyButton(icon: Icons.skip_next, tooltip: '下一首', onPressed: () => player.next()),
-                      _TinyButton(
-                        icon: Icons.queue_music_outlined,
-                        tooltip: '播放队列',
-                        // 队列里有几首，图标上就标几个——网易云也是这个数字，
-                        // 不用打开面板就知道后面还排着多少。
-                        badge: player.queue.length,
-                        onPressed: () => showPlayQueue(context),
-                      ),
-                    ],
-                  ),
-                  onTap: () => _openPlayerPage(context),
+                    );
+                    final controls = Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        SizedBox.square(
+                          dimension: 48,
+                          child: PopupMenuButton<PlayMode>(
+                            tooltip: player.playModeLabel,
+                            initialValue: player.playMode,
+                            icon: Icon(player.playModeIcon, size: 22, color: AppTheme.textSecondary),
+                            onSelected: player.setPlayMode,
+                            itemBuilder: (_) => [
+                              for (final mode in PlayMode.values)
+                                CheckedPopupMenuItem<PlayMode>(
+                                  value: mode,
+                                  checked: mode == player.playMode,
+                                  child: Row(
+                                    children: [
+                                      Icon(mode.icon, size: 20),
+                                      const SizedBox(width: 12),
+                                      Flexible(child: Text(mode.label)),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        _TinyButton(
+                          icon: Icons.skip_previous,
+                          tooltip: '上一首',
+                          onPressed: () => player.previous(),
+                        ),
+                        IconButton(
+                          iconSize: 30,
+                          tooltip: playing ? '暂停' : '播放',
+                          visualDensity: VisualDensity.standard,
+                          constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+                          padding: EdgeInsets.zero,
+                          onPressed: () => player.togglePlay(),
+                          icon: loading
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(strokeWidth: 2.4, color: AppTheme.primary),
+                                )
+                              : Icon(playing ? Icons.pause_circle_filled : Icons.play_circle_outline,
+                                  color: AppTheme.primary),
+                        ),
+                        _TinyButton(icon: Icons.skip_next, tooltip: '下一首', onPressed: () => player.next()),
+                        _TinyButton(
+                          icon: Icons.queue_music_outlined,
+                          tooltip: '播放队列',
+                          // 队列里有几首，图标上就标几个——网易云也是这个数字，
+                          // 不用打开面板就知道后面还排着多少。
+                          badge: player.queue.length,
+                          onPressed: () => showPlayQueue(context),
+                        ),
+                      ],
+                    );
+                    return compact
+                        ? Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [details, controls],
+                          )
+                        : Row(
+                            children: [Expanded(child: details), controls, const SizedBox(width: 8)],
+                          );
+                  },
                 ),
               ),
               if (inset > 0) SizedBox(height: inset),
@@ -165,8 +218,8 @@ class _TinyButton extends StatelessWidget {
               child: Icon(icon, size: 22, color: AppTheme.textSecondary),
             ),
       tooltip: tooltip,
-      visualDensity: VisualDensity.compact,
-      constraints: const BoxConstraints(minWidth: 32),
+      visualDensity: VisualDensity.standard,
+      constraints: const BoxConstraints.tightFor(width: 48, height: 48),
       padding: EdgeInsets.zero,
       onPressed: onPressed,
     );

@@ -292,6 +292,7 @@ class _SourcesPageState extends State<SourcesPage> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
+          scrollable: true,
           title: const Text('从链接导入音源'),
           content: Column(
             mainAxisSize: MainAxisSize.min,

@@ -123,7 +123,9 @@ class _PlayerPageState extends State<PlayerPage> with SingleTickerProviderStateM
     // 还写着在线，而界面其他地方都是活的。
     final swap = context.select<LibraryStore, Song?>((s) => s.swapSongFor(song));
     final isLocal = context.select<LibraryStore, bool>((s) => s.hasLocalFile(song));
-    return Scaffold(
+    return Theme(
+      data: AppTheme.palette(darkMode: true),
+      child: Builder(builder: (context) => Scaffold(
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -290,6 +292,7 @@ class _PlayerPageState extends State<PlayerPage> with SingleTickerProviderStateM
           ),
         ],
       ),
+      )),
     );
   }
 }
@@ -608,7 +611,7 @@ class _MoreMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       key: menuKey,
       offset: const Offset(0, 44),
-      color: const Color(0xFF2C2C2C),
+      color: Theme.of(context).popupMenuTheme.color,
       icon: const Icon(Icons.more_horiz, color: Colors.white70, size: 26),
       tooltip: '更多',
       itemBuilder: (_) => [

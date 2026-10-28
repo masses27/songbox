@@ -80,6 +80,22 @@ class LyricParser {
 /// How the queue advances when a track reaches its end.
 enum PlayMode { list, single, random, none }
 
+extension PlayModePresentation on PlayMode {
+  String get label => switch (this) {
+        PlayMode.list => '列表循环',
+        PlayMode.single => '单曲循环',
+        PlayMode.random => '随机播放',
+        PlayMode.none => '播完停止',
+      };
+
+  IconData get icon => switch (this) {
+        PlayMode.list => Icons.repeat,
+        PlayMode.single => Icons.repeat_one,
+        PlayMode.random => Icons.shuffle,
+        PlayMode.none => Icons.stop_circle_outlined,
+      };
+}
+
 /// Standard 5-band preset gains in dB (bass / low-mid / mid / high-mid / treble).
 class EqPreset {
   final String name;
@@ -1706,31 +1722,26 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void cyclePlayMode() {
-    playMode = switch (playMode) {
+    setPlayMode(switch (playMode) {
       PlayMode.list => PlayMode.single,
       PlayMode.single => PlayMode.random,
       PlayMode.random => PlayMode.none,
       PlayMode.none => PlayMode.list,
-    };
+    });
+  }
+
+  void setPlayMode(PlayMode mode) {
+    if (mode == playMode) return;
+    playMode = mode;
     // 存下来：这个选择是关于「她平时怎么听」的，不是这一次队列的。以前只活在内存里，
     // 想用随机听一整晚，每次重开应用都得先点回随机。
     AppSettings.instance.setPlayMode(playMode.name);
     notifyListeners();
   }
 
-  String get playModeLabel => switch (playMode) {
-        PlayMode.list => '列表循环',
-        PlayMode.single => '单曲循环',
-        PlayMode.random => '随机播放',
-        PlayMode.none => '播完停止',
-      };
+  String get playModeLabel => playMode.label;
 
-  IconData get playModeIcon => switch (playMode) {
-        PlayMode.list => Icons.repeat,
-        PlayMode.single => Icons.repeat_one,
-        PlayMode.random => Icons.shuffle,
-        PlayMode.none => Icons.stop_circle_outlined,
-      };
+  IconData get playModeIcon => playMode.icon;
 
   void setLyric(String raw) {
     lyric = LyricParser.parse(raw);

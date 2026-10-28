@@ -21,6 +21,10 @@
 
 界面这一层有两条规矩：能自动办的不留按钮，非要她出手时动作就放在提示条上（「换版本」「重试」「接着放」「撤销」），不指路设置页；本机数据没落盘、某一页没拉到、歌中途停了，都要当场在屏幕上说出来，不靠她去猜。循环模式跟音质、主题一样存进设置，重启不回列表循环。
 
+弹层（对话框、底部面板、菜单、提示条）走主题里的半透明底（92% 不透明度）并各限宽度——对话框 420、底部面板 560、提示条 480，桌面大屏不会铺满一屏；播放页无论设置是深是浅都用深色一套局部主题，黑底上不再跳出一块白面板。播放条上的循环模式从「点一下换一种」改成直接摊开四个选项（列表循环/单曲循环/随机播放/播完停止），选完不动当前曲目也不重新起播，窄屏和大字号下自动换成两行、按钮仍是 48×48。
+
+发现页那排歌单分类的词表是端内带的 57 个词（`lib/music_sdk/wy_catalog.dart`）：网易云那三个分类树接口匿名全回 `code:404 接口未找到！`，问不到官方那份分类，只能自己带；每一个词都实测能从 `/api/playlist/list` 问出歌单才写进来，没验过的一个不占那一格——点中一块空的分类，报的还是「没拉到」，等于按钮自己给她制造假故障。这一条接口也真的认 offset，所以每一类都能「换一批」，不只「推荐」那一格。榜单不再 60 多个全铺（三列宫格摊开是二十多行、四屏多的高度才看得到最后一个榜），只常驻第一组，其余靠「还有 N 组榜单」就地摊开；首页那两枚入口跳过来时替她摊好并滚到位。
+
 ## 构建
 
 工具链装在 `~/dev`（免管理员）：Flutter 3.47 / JDK 21 / Android SDK。
@@ -74,7 +78,8 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 
 几个决定记在这儿，免得下次照安卓那套去猜：
 
-- 仓库里不提交 `windows/` 那套 C++ 壳子，workflow 里 `flutter create --platforms=windows` 现造。日后 `flutter upgrade` 改壳子文件不会来来回回产生噪声 diff；窗口标题（`L"听歌小窝"`，写成 `\u` 转义让 main.cpp 保持纯 ASCII）也只能在这一步改。
+- 仓库里不提交 `windows/` 那套 C++ 壳子，workflow 里 `flutter create --platforms=windows` 现造。日后 `flutter upgrade` 改壳子文件不会来来回回产生噪声 diff；改壳子也只能在这一步之后：`dart tool/patch_windows.dart` 一次改三处 —— 窗口标题（`L"听歌小窝"`，写成 `\u` 转义让 main.cpp 保持纯 ASCII）、启动尺寸、以及分辨率/DPI 变了以后跟不上的那几条消息。
+- 窗口尺寸不再钉死模板那对 `1280×720`：模板会把逻辑尺寸再乘一次所在显示器的 DPI，低分辨率或高缩放的屏上开出来就是「窗口比屏幕还大」。现在按那块屏的工作区（已扣任务栏）取，启动时长宽都不超过工作区的 90%、也不超过 1280×720 换算成物理像素的那一档，居中摆好；最小可拖拽尺寸取 360×480（同样被工作区封顶），`WM_DPICHANGED`、`WM_DISPLAYCHANGE`、任务栏位置变了以后重新夹回工作区，正在最大化或最小化时不动它、等恢复那一刻再夹。几何算法都在 `tool/windows/window_geometry.h`，同一份头文件也拷进生成的 runner，所以 `tool/windows/window_geometry_test.cpp` 那 1000 组工作区/DPI 样本和真窗口消息断言验的就是装机那一份。补丁找不到模板锚点会直接失败，不会默默什么都不改。
 - 声音换了后端：`just_audio` 官方只有 `android/` 和 `darwin/` 两条实现，桌面上每次播放调用都是 `MissingPluginException` —— 界面起得来、就是放不出。所以加了 `just_audio_media_kit`（libmpv），`main.dart` 里只在 `Platform.isWindows` 那一支注册，原来那句 `JustAudioBackground.init` 原样挪进 `else`；`player_service.dart` 的音频管道同理，安卓走的还是原来那条。libmpv 由 `media_kit_libs_windows_audio` 在构建时拉下来拷到 exe 旁边，构建那步会验它在不在包里。
 - 数据落在 exe 旁边的 `data/`（`lib/util/app_paths.dart`）。桌面版 `getApplicationDocumentsDirectory()` 返回的是用户的「文档」根目录，不收敛就会把 `settings.json`、`library/`、`logs/`、`sources/` 全撒进她的文档里；`data/` 跟着包走，U 盘拷一份就是完整一套。旁边写不动时才退回应用支持目录。安卓落点不变。注意这个 `data/` 跟 Flutter 自己那个 `data/`（`app.so`、`flutter_assets`、`icudtl.dat`）是同一个目录，我们的 `logs/`、`library/` 就并排躺在引擎资源旁边——能用，但不体面，日后想分开就改 `AppPaths._desktopRoot()` 那一个名字。
 - 安卓专属那几样在桌面上直接绕开，不去试：系统均衡器（`AndroidEqualizer` 走 MethodChannel）、下拉菜单那张播放卡的整条自检与接桥。均衡器那一页里「这台设备没有提供系统均衡器」那句就是给桌面版的。

@@ -161,19 +161,31 @@ class CoverTile extends StatelessWidget {
   }
 }
 
+/// 歌单卡片的边长：按屏宽算「一行正好三张」。
+///
+/// 写死一个数字在两处会歪：窄一点的手机上第三张放不下，Wrap 就折成两列、右边空出
+/// 一整条；桌面版把窗口拉到一千多像素时，三张又各自大到没边。所以上下各收一道，
+/// 窄屏保底还能读，宽屏就一行多排几张。
+double sheetCardWidth(double screenWidth) =>
+    ((screenWidth - 32 - 20) / 3).floorToDouble().clamp(72.0, 140.0).toDouble();
+
 /// Playlist card: real cover plus name and a one-line description.
 class CoverCard extends StatelessWidget {
   final SheetInfo sheet;
-  const CoverCard({super.key, required this.sheet});
+
+  /// 边长。发现页按屏宽算出「一行正好三张」的宽度传进来；写死一个数字的话，
+  /// 窄一点的机器上第三张放不下，Wrap 就折成两列，右边空出一整条。
+  final double width;
+  const CoverCard({super.key, required this.sheet, this.width = 108});
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 108,
+      width: width,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CoverTile(label: '', imageUrl: sheet.img, size: 108),
+          CoverTile(label: '', imageUrl: sheet.img, size: width),
           const SizedBox(height: 4),
           Text(sheet.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, height: 1.25)),
           // 播放量 helps picking a 歌单 blind: 「经典老歌」有 8 个，热的那个一眼就能看出来。
@@ -532,10 +544,9 @@ Future<void> showSongMenu(BuildContext context, Song song,
   final fav = store.isFavorite(song);
   return showModalBottomSheet(
     context: context,
-    backgroundColor: AppTheme.pageBg,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
+    isScrollControlled: true,
+    useSafeArea: true,
+    constraints: AppTheme.sheetConstraints(context),
     builder: (ctx) {
       void rowAction(VoidCallback run) {
         Navigator.pop(ctx);
@@ -545,12 +556,13 @@ Future<void> showSongMenu(BuildContext context, Song song,
       Widget item(IconData icon, String label, VoidCallback run) => ListTile(
             dense: true,
             visualDensity: const VisualDensity(vertical: -1),
-            leading: Icon(icon, size: 22, color: AppTheme.textPrimary),
+            leading: Icon(icon, size: 22, color: Theme.of(ctx).colorScheme.onSurface),
             title: Text(label, style: const TextStyle(fontSize: 15)),
             onTap: () => rowAction(run),
           );
       final player = context.read<PlayerService>();
       return SafeArea(
+        child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -583,7 +595,7 @@ Future<void> showSongMenu(BuildContext context, Song song,
                     style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
               ),
             ),
-            Divider(height: 1, color: AppTheme.divider),
+            Divider(height: 1, color: Theme.of(context).dividerColor),
             item(fav ? Icons.favorite : Icons.favorite_border,
                 fav ? '取消收藏' : '收藏', () {
               store.toggleFavorite(song);
@@ -620,6 +632,7 @@ Future<void> showSongMenu(BuildContext context, Song song,
             const SizedBox(height: 6),
           ],
         ),
+        ),
       );
     },
   );
@@ -642,10 +655,8 @@ Future<void> showOtherVersionsSheet(BuildContext context, Song song) async {
   final picked = await showModalBottomSheet<Song>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: AppTheme.pageBg,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
+    useSafeArea: true,
+    constraints: AppTheme.sheetConstraints(context),
     builder: (_) => _OtherVersionsSheet(song: song),
   );
   if (picked == null || !context.mounted) return;
@@ -706,7 +717,7 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
               ),
             ),
-            Divider(height: 1, color: AppTheme.divider),
+            Divider(height: 1, color: Theme.of(context).dividerColor),
             Expanded(
               child: FutureBuilder<List<Song>>(
                 future: _future,
@@ -722,7 +733,8 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
                   if (found.isEmpty) {
                     // 原来这里只写「到搜索页换个关键词，或在「音源」页启用别的音源」——
                     // 两个去处都得她自己退出去找。按钮直接放在这一格上。
-                    return Column(
+                    return SingleChildScrollView(
+                      child: Column(
                       children: [
                         const EmptyState(
                           icon: Icons.music_off_outlined,
@@ -751,6 +763,7 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
                           ),
                         ),
                       ],
+                      ),
                     );
                   }
                   return ListView.builder(
@@ -839,10 +852,9 @@ void toggleSheetFavorite(BuildContext context, SheetInfo sheet) {
 /// one right here.
 Future<void> pickPlaylist(BuildContext context, Song song) => showModalBottomSheet(
       context: context,
-      backgroundColor: AppTheme.pageBg,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      isScrollControlled: true,
+      useSafeArea: true,
+      constraints: AppTheme.sheetConstraints(context),
       builder: (_) => _PlaylistPicker(song: song),
     );
 
@@ -897,7 +909,7 @@ class _PlaylistPickerState extends State<_PlaylistPicker> {
               ],
             ),
           ),
-          Divider(height: 1, color: AppTheme.divider),
+          Divider(height: 1, color: Theme.of(context).dividerColor),
           Flexible(
             child: ListView(
               shrinkWrap: true,
@@ -958,24 +970,26 @@ class _PlaylistPickerState extends State<_PlaylistPicker> {
 /// Small labelled text dialog, used by 新建/重命名歌单.
 Future<String?> promptText(BuildContext context,
     {required String title, required String hint, String initial = '', String confirmLabel = '确定'}) {
-  final ctrl = TextEditingController(text: initial);
+  var text = initial;
   return showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       title: Text(title),
-      content: TextField(
-        controller: ctrl,
+      content: TextFormField(
+        initialValue: initial,
+        onChanged: (v) => text = v,
         autofocus: true,
         maxLength: 24,
         decoration: InputDecoration(hintText: hint, counterText: ''),
-        onSubmitted: (v) => Navigator.pop(ctx, v),
+        onFieldSubmitted: (v) => Navigator.pop(ctx, v),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-        FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(confirmLabel)),
+        FilledButton(onPressed: () => Navigator.pop(ctx, text), child: Text(confirmLabel)),
       ],
     ),
-  ).whenComplete(ctrl.dispose);
+  );
 }
 
 /// 不可逆动作（删本地文件、批量清空）前的一次确认。
@@ -984,6 +998,7 @@ Future<bool> confirmAction(BuildContext context,
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
+      scrollable: true,
       title: Text(title),
       content: Text(message),
       actions: [
@@ -1060,9 +1075,7 @@ void toast(BuildContext context, String text, {String? actionLabel, VoidCallback
     content: Text(text),
     duration: Duration(seconds: hasAction ? 4 : 2),
     behavior: SnackBarBehavior.floating,
-    // 播放条现在是真正的 bottomNavigationBar，Scaffold 会把提示抬到它上面，
-    // 这里只留 12 的呼吸距离；再留 84 就会浮到列表中间。
-    margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+    width: (MediaQuery.sizeOf(context).width - 32).clamp(0.0, 480.0),
     action: hasAction ? SnackBarAction(label: actionLabel, onPressed: onAction) : null,
   ));
 }

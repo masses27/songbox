@@ -167,6 +167,7 @@ class _UserPlaylistPageState extends State<UserPlaylistPage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: Text('删除「${playlist.name}」'),
         content: const Text('只删这个歌单和它记的歌，下载好的文件与收藏都不受影响。'),
         actions: [

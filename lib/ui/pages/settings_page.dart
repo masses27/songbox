@@ -31,6 +31,7 @@ class SettingsPage extends StatelessWidget {
     final doMusic = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         title: const Text('清除缓存'),
         content: Text('图片与预取歌曲缓存 ${_fmt(bytes)}\n已下载音乐 ${_fmt(musicBytes)}\n\n'
             '${musicBytes == 0 ? '暂时还没有下载文件。' : '是否连同已下载的音乐一起删除？'}'),

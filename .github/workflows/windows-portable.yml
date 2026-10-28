@@ -39,23 +39,12 @@ jobs:
         shell: pwsh
         run: flutter create --platforms=windows --project-name lyric_music .
 
-      - name: 窗口标题写中文名
+      - name: 生成中文标题和自适应窗口配置
         shell: pwsh
-        # 壳子是现造的，所以标题也只能在这儿改：模板里那句是英文包名，任务栏和标题栏
-        # 上顶着一个 lyric_music 太难认。写进 main.cpp 的是 \u 转义（听歌小窝四个码位）
-        # 而不是汉字本身，为的是那份 C++ 源文件保持纯 ASCII —— RC/MSVC 对各机的代码页
-        # 不一样，直接塞汉字哪天就编成乱码。转义串在这里用字符码拼出来，省得 YAML 里
-        # 反斜杠到底剩几层还得猜。
         run: |
           $ErrorActionPreference = 'Stop'
-          $f = 'windows/runner/main.cpp'
-          $t = Get-Content -Raw -Path $f
-          $bs = [char]92
-          $title = 'L"' + $bs + 'u542c' + $bs + 'u6b4c' + $bs + 'u5c0f' + $bs + 'u7a9d"'
-          $t2 = $t.Replace('L"lyric_music"', $title)
-          if ($t2 -eq $t) { throw "main.cpp 里没找到那句标题，改动没落地" }
-          Set-Content -Path $f -Value $t2 -Encoding ascii -NoNewline
-          Select-String -Path $f -Pattern 'window.Create'
+          dart tool/patch_windows.dart
+          if ($LASTEXITCODE -ne 0) { throw 'Windows runner patch failed' }
 
       - name: pub get
         shell: pwsh

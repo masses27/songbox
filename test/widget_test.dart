@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:lyric_music/models/results.dart';
 import 'package:lyric_music/models/song.dart';
 import 'package:lyric_music/player/audio_prefetch.dart';
 import 'package:lyric_music/ui/pages/builtin_library.dart';
@@ -70,6 +71,53 @@ void main() {
       );
       expect(BuiltinLibrary.inAppSources, contains(src), reason: '$src 端内就能取链');
     }
+  });
+
+  test('歌单卡的宽按屏宽给：窄屏不空出一列，宽屏不放大到没边', () {
+    // 以前 CoverCard 写死 108：360 的屏上第三张放不下（3*108+2*12+2*16=380），
+    // Wrap 就折成两列，右边空出一条；桌面版窗口拉到一千多，三张又各占三百多像素。
+    expect(sheetCardWidth(360), 102);
+    expect(sheetCardWidth(320), 89);
+    expect(sheetCardWidth(412), 120);
+    expect(sheetCardWidth(1200), 140, reason: '手机卡片的大小上限，宽屏改为多排几张');
+    expect(sheetCardWidth(240), 72, reason: '再窄也不能小到名字读不出来');
+    for (final w in [320.0, 360.0, 393.0, 412.0]) {
+      final card = sheetCardWidth(w);
+      expect(3 * card + 2 * 10 + 2 * 16, lessThanOrEqualTo(w), reason: '$w 的屏要真放得下三张');
+    }
+  });
+
+  testWidgets('360 的屏上歌单卡真排成一行三张', (tester) async {
+    // 「一页看到更多」这句话得能量出来：卡片是按屏宽算的，可 Wrap 到底排几张只有
+    // 真摆一次才知道。写死 108 的那一版在这台宽度上排的是两张。
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sheets = [
+      for (var i = 0; i < 6; i++) SheetInfo('wy', '$i', '歌单$i', null, '', playCount: 100 * i),
+    ];
+    final card = sheetCardWidth(360);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topLeft,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 12,
+              children: [for (final s in sheets) CoverCard(sheet: s, width: card)],
+            ),
+          ),
+        ),
+      ),
+    ));
+    expect(tester.takeException(), isNull);
+    final tops = [for (var i = 0; i < 6; i++) tester.getTopLeft(find.byType(CoverCard).at(i)).dy];
+    expect(tops[0], tops[1]);
+    expect(tops[1], tops[2]);
+    expect(tops[3], greaterThan(tops[2]), reason: '第四张该换行，不是挤在同一行里');
   });
 
   testWidgets('无限宽的封面块（首页轮播）不会在 build 里炸掉', (tester) async {

@@ -145,11 +145,16 @@ class BuiltinLibrary {
   Future<List<Song>> recommendedSongs({int limit = 30}) =>
       _catalog.run('newsong-$limit', () => WyCatalog.recommendedSongs(limit: limit));
 
-  List<String> get sheetCategories => WyCatalog.categories;
+  /// 发现页横向那一排的常用分类。
+  List<String> get sheetCategories => WyCatalog.quickCategories;
 
-  Future<List<SheetInfo>> sheets(String source, String category, {int page = 1}) {
+  /// 「全部分类」面板用的分组词表（语种/风格/场景/情感/主题）。
+  List<SheetCategoryGroup> get sheetCategoryGroups => WyCatalog.categoryGroups;
+
+  Future<List<SheetInfo>> sheets(String source, String category, {int page = 1, int limit = 30}) {
     if (source != 'wy') throw Exception('歌单分类目前只支持网易云曲库');
-    return _catalog.run('hot-$category-$page', () => WyCatalog.hotSheets(category, page: page));
+    return _catalog.run('hot-$category-$page-$limit',
+        () => WyCatalog.hotSheets(category, page: page, limit: limit));
   }
 
   Future<SearchResult> sheetSongs(String source, String sheetId, {int page = 1}) {

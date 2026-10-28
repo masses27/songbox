@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lyric_music/library/taste_profile.dart';
 import 'package:lyric_music/models/results.dart';
 import 'package:lyric_music/models/song.dart';
+import 'package:lyric_music/music_sdk/wy_catalog.dart';
 import 'package:lyric_music/music_sdk/wy_search.dart';
 import 'package:lyric_music/ui/rank_groups.dart';
 import 'package:lyric_music/util/humanize.dart';
@@ -278,6 +279,33 @@ void main() {
             swapReady: (_) => true),
         taste.scoreOf(Song(source: 'wy', songmid: 'f', name: '免费歌', singer: '某人')),
       );
+    });
+  });
+
+  group('歌单分类词表', () {
+    // 分类树接口匿名全 404，词表只能带在端内；带进来的每一个词都要真的能问出歌单，
+    // 否则点中那一格就是给她看一块「没拉到」。
+    test('横向那一排用到的分类都在分组词表里', () {
+      final grouped = WyCatalog.categoryGroups.expand((g) => g.names).toSet();
+      for (final c in WyCatalog.quickCategories) {
+        if (c == '推荐') continue; // 推荐不是分类，走的是个性化接口
+        expect(grouped, contains(c), reason: '$c 排在哪一排，就该在词表里有那一项');
+      }
+      expect(WyCatalog.quickCategories.first, '推荐');
+    });
+
+    test('一个词不在两组里出现两次', () {
+      final all = WyCatalog.categoryGroups.expand((g) => g.names).toList();
+      expect(all.toSet(), hasLength(all.length), reason: '同一个分类挂两组，面板上就有两颗一样的胶囊');
+      for (final g in WyCatalog.categoryGroups) {
+        expect(g.names, isNotEmpty, reason: '${g.title} 这一组是空的，摊开只会是一行标题');
+        expect(g.title, isNot(contains('推荐')));
+      }
+    });
+
+    test('「推荐」不混进分类词表', () {
+      // 它是界面自己排的第一格；混进词表的话「换一批」会拿它去问分类接口。
+      expect(WyCatalog.categoryGroups.expand((g) => g.names), isNot(contains('推荐')));
     });
   });
 

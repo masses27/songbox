@@ -9,11 +9,9 @@ import '../widgets.dart';
 /// Bottom sheet over the current play queue: jump, drop, change the loop mode.
 Future<void> showPlayQueue(BuildContext context) => showModalBottomSheet(
       context: context,
-      backgroundColor: AppTheme.pageBg,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      useSafeArea: true,
+      constraints: AppTheme.sheetConstraints(context),
       builder: (_) => const _PlayQueueSheet(),
     );
 
@@ -58,27 +56,29 @@ class _PlayQueueSheetState extends State<_PlayQueueSheet> {
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerService>();
-    // 面板自己带一套提示条：模态底sheet 盖在页面之上，全局那条「已移除 + 撤销」
-    // 正好落在被遮住的下半屏，撤销等于从来没给过。
-    return ScaffoldMessenger(
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.6,
-          minChildSize: 0.35,
-          maxChildSize: 0.9,
-          builder: (context, ctrl) {
-            _locateCurrent(ctrl, player.index);
-            return Column(
+    // Scaffold 必须在可拖动区域里面，否则会把整张弹层撑满窗口。
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.7,
+      minChildSize: 0.45,
+      maxChildSize: 1,
+      builder: (context, ctrl) {
+        _locateCurrent(ctrl, player.index);
+        return ScaffoldMessenger(
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            body: SafeArea(
+              top: false,
+              child: Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-                child: Row(
+                child: Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text('播放队列 · ${player.queue.length} 首',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                    const Spacer(),
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                     TextButton.icon(
                       onPressed: player.cyclePlayMode,
                       icon: Icon(player.playModeIcon, size: 18),
@@ -102,10 +102,10 @@ class _PlayQueueSheetState extends State<_PlayQueueSheet> {
                   ],
                 ),
               ),
-              Divider(height: 1, color: AppTheme.divider),
+              Divider(height: 1, color: Theme.of(context).dividerColor),
               Expanded(
                 child: player.queue.isEmpty
-                    ? Center(child: Text('队列是空的', style: TextStyle(color: AppTheme.textSecondary)))
+                    ? Center(child: Text('队列是空的', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)))
                     : Stack(
                         children: [
                           ReorderableListView.builder(
@@ -114,7 +114,7 @@ class _PlayQueueSheetState extends State<_PlayQueueSheet> {
                             itemCount: player.queue.length,
                             onReorderItem: player.moveInQueue,
                             proxyDecorator: (child, _, _) => Material(
-                              color: AppTheme.pageBg.withValues(alpha: .95),
+                              color: Theme.of(context).colorScheme.surface.withValues(alpha: .95),
                               borderRadius: BorderRadius.circular(8),
                               elevation: 4,
                               child: child,
@@ -135,7 +135,7 @@ class _PlayQueueSheetState extends State<_PlayQueueSheet> {
                                     width: 30,
                                     child: active
                                         ? const Icon(Icons.equalizer_rounded, color: AppTheme.primary, size: 20)
-                                        : Icon(Icons.drag_handle, color: AppTheme.textSecondary, size: 20),
+                                        : Icon(Icons.drag_handle, color: Theme.of(context).colorScheme.onSurfaceVariant, size: 20),
                                   ),
                                 ),
                                 title: Text(s.name,
@@ -144,13 +144,13 @@ class _PlayQueueSheetState extends State<_PlayQueueSheet> {
                                     style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: active ? FontWeight.w700 : FontWeight.normal,
-                                        color: active ? AppTheme.primary : AppTheme.textPrimary)),
+                                        color: active ? AppTheme.primary : Theme.of(context).colorScheme.onSurface)),
                                 subtitle: Text(s.singer,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                                    style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                                 trailing: IconButton(
-                                  icon: Icon(Icons.close, size: 18, color: AppTheme.textSecondary),
+                                  icon: Icon(Icons.close, size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
                                   tooltip: '从队列移除',
                                   onPressed: () => _remove(player, i),
                                 ),
@@ -168,9 +168,9 @@ class _PlayQueueSheetState extends State<_PlayQueueSheet> {
                               bottom: 12,
                               child: DecoratedBox(
                                 decoration: BoxDecoration(
-                                  color: AppTheme.cardBg,
+                                  color: Theme.of(context).cardColor,
                                   borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: AppTheme.divider),
+                                  border: Border.all(color: Theme.of(context).dividerColor),
                                 ),
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(20),
@@ -179,7 +179,7 @@ class _PlayQueueSheetState extends State<_PlayQueueSheet> {
                                     padding: const EdgeInsets.fromLTRB(10, 6, 12, 6),
                                     child: Row(
                                       children: [
-                                        Icon(Icons.my_location, size: 15, color: AppTheme.textSecondary),
+                                        Icon(Icons.my_location, size: 15, color: Theme.of(context).colorScheme.onSurfaceVariant),
                                         const SizedBox(width: 4),
                                         const Text('在播这首', style: TextStyle(fontSize: 12)),
                                       ],
@@ -192,10 +192,11 @@ class _PlayQueueSheetState extends State<_PlayQueueSheet> {
                       ),
               ),
             ],
-          );
-          },
-        ),
-      ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
