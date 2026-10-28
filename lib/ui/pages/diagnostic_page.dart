@@ -8,7 +8,7 @@ import '../player/player_bar.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
-/// 音源自检：把每个源各问一次，服务器回什么就摊什么。
+/// 曲库自检：把每个源各问一次，服务器回什么就摊什么。
 ///
 /// 之所以放在 App 里而不是我在电脑上跑：这些接口的拦不拦是按出口 IP 决定的
 /// （酷狗的行为验证就是这样），家里的宽带和手机流量各是一种结果。
@@ -23,7 +23,6 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
   static const _steps = <({String label, Future<ProbeResult> Function() run})>[
     (label: '网易云 端内直连', run: SourceProbe.netease),
     (label: 'QQ 端内直连', run: SourceProbe.tencent),
-    (label: '音源脚本', run: SourceProbe.lxSource),
     (label: 'B 站 整首兜底', run: SourceProbe.bilibili),
     (label: '酷狗 整首直链', run: SourceProbe.kugou),
   ];
@@ -89,7 +88,7 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
     final t = DateTime.now();
     String two(int n) => n.toString().padLeft(2, '0');
     final lines = <String>[
-      '听歌小窝 音源自检 ${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}  '
+      '听歌小窝 曲库自检 ${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}  '
           '音质 ${qualityLabel(AppSettings.instance.quality)}${_stopped ? '（中途停了）' : ''}',
     ];
     for (final step in _steps) {
@@ -114,7 +113,7 @@ class _DiagnosticPageState extends State<DiagnosticPage> {
     final actionable = _results.length - okCount - inert;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('音源自检'),
+        title: const Text('曲库自检'),
         // 跑完（或停下）才有东西可抄；还在跑的时候按下去抄到的是半截。
         actions: [
           if (!_busy && _results.isNotEmpty)
@@ -185,7 +184,7 @@ class _Row extends StatelessWidget {
   Widget build(BuildContext context) {
     final r = result;
     // 三种图标：绿勾=通；橙色感叹号=不通、值得看一眼；灰色 i=不通但这一层用不上。
-    // 少了最后这一档，「音源脚本」「酷狗」会永远红着，而它们红着不影响听歌。
+    // 少了最后这一档，「酷狗」这种对照曲本身要会员的会永远红着，而它红着不影响听歌。
     final icon = r == null
         ? (busy
             ? Icon(Icons.radio_button_unchecked, color: AppTheme.textSecondary, size: 20)

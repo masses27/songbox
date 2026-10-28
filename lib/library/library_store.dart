@@ -593,7 +593,7 @@ class LibraryStore extends ChangeNotifier {
   // 下次 resolveUrl 第一步就命中；确认过放不出的也记一笔，短期内直接快速失败，
   // 不然 40 首的榜单每首都重跑一遍链子，跳到天黑。
   //
-  // 不只会员歌：音源放不出的酷我单曲换到网易云同一首，也照这个记下来——
+  // 不只会员歌：端内取不到整首的酷我单曲换到网易云同一首，也照这个记下来——
   // 「一首歌一个源」本来就是按曲库里的每一条分别记住用哪个。
 
   final Map<String, Song> _swaps = {};
@@ -616,13 +616,13 @@ class LibraryStore extends ChangeNotifier {
     _markVip();
   }
 
-  /// 缓存的那条也可能失效（音源换了、下架了），忘掉它让下次重新找。
+  /// 缓存的那条也可能失效（版权变了、下架了），忘掉它让下次重新找。
   void forgetSwapSong(Song s) {
     if (_swaps.remove(keyOf(s)) != null) _markVip();
   }
 
   /// 期限内确认过「找不到能播的版本」。到期就重新算，
-  /// 因为音源和版权都会变，一条判定不该管一辈子。
+  /// 因为网络和版权都会变，一条判定不该管一辈子。
   bool swapCheckedDead(Song s) {
     final until = _deadUntil[keyOf(s)];
     if (until == null) return false;
@@ -634,7 +634,7 @@ class LibraryStore extends ChangeNotifier {
     return true;
   }
 
-  /// 会员歌版权松动得慢，一周问一次就够；普通话不了的多半是音源那阵子抽风，
+  /// 会员歌版权松动得慢，一周问一次就够；普通话不了的多半是当天的网络或风控，
   /// 半天之后值得再试。
   static const _deadVip = Duration(days: 7);
   static const _deadOther = Duration(hours: 12);
@@ -647,13 +647,6 @@ class LibraryStore extends ChangeNotifier {
     final ttl = s.twinBlocked ? _deadVip : _deadOther;
     _deadUntil[keyOf(s)] = DateTime.now().add(ttl).millisecondsSinceEpoch;
     _swaps.remove(keyOf(s));
-    _markVip();
-  }
-
-  /// 换音源之后调用：旧判定是在「那批取链能力」下得出的，不能继续拦着新歌。
-  void clearSwapDead() {
-    if (_deadUntil.isEmpty) return;
-    _deadUntil.clear();
     _markVip();
   }
 

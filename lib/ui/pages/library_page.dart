@@ -16,7 +16,6 @@ import 'eq_page.dart';
 import 'log_page.dart';
 import 'settings_page.dart';
 import 'sheet_detail_page.dart';
-import 'sources_page.dart';
 import 'user_playlist_page.dart';
 
 class LibraryPage extends StatefulWidget {
@@ -76,12 +75,6 @@ class _LibraryPageState extends State<LibraryPage> implements ScrollToTop {
           ),
         ),
         const SizedBox(height: 6),
-        _SettingsTile(
-          icon: Icons.sensors,
-          title: '音源管理',
-          subtitle: '内置音源 / 自动更新 / 手动导入',
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SourcesPage())),
-        ),
         _SettingsTile(
           icon: Icons.tune,
           title: '均衡器',

@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../library/library_store.dart';
+import '../../library/taste_profile.dart';
 import '../../models/results.dart';
+import '../../models/song.dart';
+import '../../player/player_service.dart';
 import '../../util/humanize.dart';
 import '../rank_groups.dart';
 import '../widgets.dart';
+import 'album_page.dart';
+import 'artist_page.dart';
 import 'builtin_library.dart';
 import 'rank_detail_page.dart';
 import 'sheet_detail_page.dart';
@@ -25,10 +32,16 @@ class DiscoverPage extends StatefulWidget {
 }
 
 class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop, ShowAllRanks {
-  static const _rankSources = ['wy', 'kw'];
+  static const _rankSources = ['wy', 'kw', 'tx'];
   final ScrollController _scroll = ScrollController();
   // 下拉刷新时歌单分类那一块也要跟着重取，不然它还拿着刚才被清掉的旧数据。
   final _sheetBlockKey = GlobalKey<_SheetCategoriesState>();
+  // 三块新板块同理：缓存刚清掉，它们各自重新取一次。
+  final _freshBlockKey = GlobalKey<_StripState<Song>>();
+  final _albumBlockKey = GlobalKey<_StripState<AlbumInfo>>();
+  final _artistBlockKey = GlobalKey<_StripState<ArtistInfo>>();
+  // 口味那一排也一样，但它还要把整池候选丢掉重搜（见 [_tastePool]）。
+  final _tasteBlockKey = GlobalKey<_StripState<Song>>();
   // 榜单那一块的起点：从首页「全部榜单」跳过来要滚到这里。
   final _rankBlockKey = GlobalKey();
   List<RankInfo> _ranks = const [];
@@ -45,10 +58,29 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop, Sho
   /// 不然慢的那趟把刚切好的源盖回旧榜单。
   int _loadGen = 0;
 
+  /// 口味那一排的「按谁挑的」，空表示这台手机还没听出口味，整块不出现。
+  List<String> _tasteNames = const [];
+
+  /// 口味那一排的候选池：搜一次留着，「换一批」在池子里切窗口，不再重搜。
+  List<Song>? _tastePool;
+
   @override
   void initState() {
     super.initState();
+    _readTaste();
     _load();
+  }
+
+  /// 从本机听歌记录里读出口味的前几位。这一层是同步的（[LibraryStore.taste] 只算内存里
+  /// 那几份表），所以可以直接在 initState 里读，不用等网络。
+  void _readTaste({bool notify = false}) {
+    final names = LibraryStore.instance.taste().topArtists(3);
+    _tastePool = null;
+    if (notify) {
+      setState(() => _tasteNames = names);
+    } else {
+      _tasteNames = names;
+    }
   }
 
   @override
@@ -86,6 +118,12 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop, Sho
       if (refresh) {
         lib.invalidateCatalog();
         _sheetBlockKey.currentState?.reload();
+        _freshBlockKey.currentState?.reload();
+        _albumBlockKey.currentState?.reload();
+        _artistBlockKey.currentState?.reload();
+        // 口味是听出来的：这几天多听了几首，下拉一次就该换人顶上，池子整个重搜。
+        _readTaste(notify: true);
+        _tasteBlockKey.currentState?.reload();
       }
       final list = await lib.rankList(_rankSource);
       if (mounted && gen == _loadGen) setState(() => _ranks = list);
@@ -127,10 +165,55 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop, Sho
                   children: [
                     Text('发现', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
                     const SizedBox(height: 4),
-                    Text('歌单分类 · 榜单', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    // 这一行是把屏幕上有的板块挨个点一遍，所以口味那一块没出现时不能提它：
+                    // 写着一排她找不到东西的名字，等于让页脚替界面说谎。
+                    Text(_tasteNames.isEmpty
+                        ? '新歌 · 新碟 · 歌手 · 歌单 · 榜单'
+                        : '口味 · 新歌 · 新碟 · 歌手 · 歌单 · 榜单',
+                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                   ],
                 ),
               ),
+            ),
+          ),
+          if (_tasteNames.isNotEmpty)
+            SliverToBoxAdapter(
+              child: _Strip<Song>(
+                key: _tasteBlockKey,
+                title: '按你的口味',
+                hint: '你听得最多的是 ${_tasteNames.join('、')}，这一排是他们别的歌',
+                height: 132,
+                load: (page, _) => _tasteWindow(page),
+                tile: (context, s, batch) => SongCard(song: s, batch: batch, onTap: _play),
+              ),
+            ),
+          SliverToBoxAdapter(
+            child: _Strip<Song>(
+              key: _freshBlockKey,
+              title: '新歌速递',
+              height: 132,
+              load: (page, _) => _freshWindow(page),
+              tile: (context, s, batch) => SongCard(song: s, batch: batch, onTap: _play),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: _Strip<AlbumInfo>(
+              key: _albumBlockKey,
+              title: '新碟上架',
+              height: 152,
+              tabs: BuiltinLibrary.instance.albumAreas,
+              load: (page, area) =>
+                  BuiltinLibrary.instance.newAlbums(area: area, page: page, limit: _stripSize),
+              tile: (context, a, _) => _AlbumCard(album: a),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: _Strip<ArtistInfo>(
+              key: _artistBlockKey,
+              title: '热门歌手',
+              height: 100,
+              load: (page, _) => BuiltinLibrary.instance.topArtists(page: page, limit: _stripSize),
+              tile: (context, a, _) => _ArtistCard(artist: a),
             ),
           ),
           SliverToBoxAdapter(child: _SheetCategories(key: _sheetBlockKey)),
@@ -200,6 +283,343 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop, Sho
       ),
     );
   }
+
+  /// 点一格新歌就地播：队列起在底部播放条上，不跳播放页（和首页那一排同一个动作）。
+  /// 队列是屏幕上这一批，不是接口给的一百首 —— 她按下去看到的是哪几首，往下就是哪几首。
+  void _play(Song song, List<Song> batch) =>
+      context.read<PlayerService>().playList(batch, batch.indexOf(song));
+
+  /// 新歌速递的「换一批」在接口一次给回的那一百首里切窗口：那条接口不认翻页
+  /// （实测 `area`、`offset` 都是摆设），但 [BuiltinLibrary.freshSongs] 那五分钟
+  /// 缓存让第二屏不要钱。切到头交空列表，由板块自己绕回第一批。
+  Future<List<Song>> _freshWindow(int page) async {
+    final all = await BuiltinLibrary.instance.freshSongs();
+    final from = (page - 1) * _stripSize;
+    if (all.isEmpty || from >= all.length) return const [];
+    return all.skip(from).take(_stripSize).toList();
+  }
+
+  /// 口味那一排的「换一批」同样是在池子里切窗口——那一池是她最常听的那几位在网易云上的
+  /// 歌，搜一次就够，翻到没有交空列表，由板块自己绕回第一批。
+  Future<List<Song>> _tasteWindow(int page) async {
+    final pool = _tastePool ??= await _tastePoolSongs();
+    final from = (page - 1) * _stripSize;
+    if (pool.isEmpty || from >= pool.length) return const [];
+    return pool.skip(from).take(_stripSize).toList();
+  }
+
+  /// 她听得最多的那几位，各自在网易云上的一批热门歌，一位拿一首轮着排。
+  ///
+  /// 为什么要筛：按歌手名搜出来的东西并不都挂着那位（撞名的、翻唱的、合集里塞的），
+  /// 所以每一首都要有这位署名才留下；她已经收藏过的、这几天刚听过的也不端上来——
+  /// 那些她库里就有，再推一遍只显得推荐没在动。
+  /// 某一位的搜索挂了不算整块失败：剩下两位照样能凑一排，全挂了才报「没拉到」让她重试。
+  Future<List<Song>> _tastePoolSongs() async {
+    final store = LibraryStore.instance;
+    final taste = store.taste();
+    final names = _tasteNames;
+    if (names.isEmpty) throw Exception('还没听出口味来');
+    final wanted = {for (final n in names) Taste.normalizeArtist(n)};
+    final skip = {...taste.wornOut, ...taste.heardRecently};
+    Future<List<Song>> one(String n) async {
+      try {
+        return (await BuiltinLibrary.instance.search(n, source: 'wy', limit: 20)).list;
+      } catch (_) {
+        return const <Song>[];
+      }
+    }
+
+    final batches = await Future.wait([for (final n in names) one(n)]);
+    final seen = <String>{};
+    final out = <Song>[];
+    // 轮着取：一位连取十二首的话，这一排就成了一个人的精选集，另外两位白搜。
+    for (var at = 0; at < 20; at++) {
+      for (final b in batches) {
+        if (at >= b.length) continue;
+        final s = b[at];
+        if (!Taste.artistsOf(s).any(wanted.contains)) continue;
+        if (seen.contains(Taste.keyOf(s)) || skip.contains(Taste.keyOf(s))) continue;
+        if (store.isFavorite(s)) continue;
+        seen.add(Taste.keyOf(s));
+        out.add(s);
+      }
+    }
+    if (out.isEmpty) throw Exception('网易云上没搜到这几位的歌');
+    // 一按就出声的排前面：这一排是顺手点的，塞满要绕整条换源链子的那种，
+    // 她的感受就是「怎么点三首有两首在转圈」。已经备好免费版的会员歌算这一档。
+    bool playable(Song s) => !s.twinBlocked || store.hasSwapSong(s);
+    final good = out.where(playable).toList();
+    return [...good, ...out.where((s) => !playable(s))];
+  }
+}
+
+/// 发现页三块新板块一屏摆几个，「换一批」每次也正好挪这么多个。
+const _stripSize = 12;
+
+/// 发现页一块横向板块：标题、可选的一排胶囊、「换一批」、坏了就地重试。
+///
+/// 新歌速递 / 新碟上架 / 热门歌手要的动作完全一样 —— 进来自己取一次、父页下拉刷新
+/// 跟着重取、往后挪到头绕回第一批、坏了只在这一格里吭一声 —— 差别只有拿什么数据、
+/// 每格画成什么样，所以收成一个泛型组件，不把那段状态机抄三遍。
+class _Strip<T> extends StatefulWidget {
+  const _Strip({
+    super.key,
+    required this.title,
+    required this.load,
+    required this.tile,
+    required this.height,
+    this.tabs = const {},
+    this.hint,
+  });
+
+  final String title;
+
+  /// 标题下面那一行小字（「按你的口味」要说清是按谁挑的）。标题那一排放不下长句：
+  /// 360 宽的屏上，标题再加长就要和右边的「换一批」抢地方。
+  final String? hint;
+
+  /// 取第 [page] 批（从 1 起）。没摆胶囊的板块拿到的 [tab] 是空串。
+  final Future<List<T>> Function(int page, String tab) load;
+
+  /// 画一格。[batch] 是屏幕上这一批 —— 点下去要起队列的那类板块用它当队列。
+  final Widget Function(BuildContext context, T item, List<T> batch) tile;
+
+  /// 横向 ListView 要一个有限高度：封面那一边加上下面两三行字。
+  final double height;
+
+  /// 标题下面那排胶囊（新碟的地区）：接口认的词 → 界面上的字。空的话不摆这一排。
+  final Map<String, String> tabs;
+
+  @override
+  State<_Strip<T>> createState() => _StripState<T>();
+}
+
+class _StripState<T> extends State<_Strip<T>> {
+  List<T> _items = const [];
+  int _page = 1;
+  String _tab = '';
+  bool _loading = false;
+  bool _swapping = false;
+  String? _error;
+
+  /// 连点几个胶囊再搭上拉刷新就是几趟并发请求，回来的先后看网络：只认最后发起那趟。
+  int _gen = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _tab = widget.tabs.isEmpty ? '' : widget.tabs.keys.first;
+    _load();
+  }
+
+  /// 父页下拉刷新时叫一声：缓存已经被清掉，这一格重新取当前那一档。
+  void reload() => _load();
+
+  Future<void> _load() async {
+    final gen = ++_gen;
+    final tab = _tab;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _page = 1;
+    });
+    try {
+      final list = await widget.load(1, tab);
+      if (mounted && gen == _gen) setState(() => _items = list);
+    } catch (e) {
+      if (mounted && gen == _gen) {
+        setState(() {
+          _error = humanizeError(e);
+          _items = const [];
+        });
+      }
+    } finally {
+      if (mounted && gen == _gen) setState(() => _loading = false);
+    }
+  }
+
+  /// 往后挪一批；接口不再给东西就是挪到头了，绕回第一批（那一批还在缓存里，
+  /// 不会再发一次请求），别让她点了颗没动静的按钮。
+  Future<void> _swap() async {
+    if (_swapping || _items.isEmpty) return;
+    final gen = _gen;
+    final tab = _tab;
+    setState(() => _swapping = true);
+    try {
+      var at = _page + 1;
+      var list = await widget.load(at, tab);
+      if (list.isEmpty) {
+        at = 1;
+        list = await widget.load(at, tab);
+      }
+      // 等的这一会儿她可能已经换了档或重拉过：那这批就不是当前这一档的答案了。
+      if (!mounted || gen != _gen || list.isEmpty) return;
+      _page = at;
+      setState(() => _items = list);
+    } catch (e) {
+      // 换失败原来那批还在，但要吭一声，不然点了没动静看着像按钮坏了。
+      if (mounted) toast(context, '这批没换出来：${humanizeError(e)}');
+    } finally {
+      if (mounted) setState(() => _swapping = false);
+    }
+  }
+
+  void _pickTab(String t) {
+    if (t == _tab) return;
+    setState(() {
+      _tab = t;
+      _items = const [];
+    });
+    _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(widget.title,
+            actionText: _items.isEmpty ? null : (_swapping ? '正在换…' : '换一批'),
+            onAction: _swapping || _items.isEmpty ? null : _swap),
+        if (widget.hint != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(widget.hint!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+          ),
+        if (widget.tabs.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                for (final e in widget.tabs.entries)
+                  ChoiceChip(
+                    label: Text(e.value, style: const TextStyle(fontSize: 12)),
+                    visualDensity: VisualDensity.compact,
+                    selected: _tab == e.key,
+                    selectedColor: AppTheme.primary.withValues(alpha: .15),
+                    onSelected: (_) => _pickTab(e.key),
+                  ),
+              ],
+            ),
+          ),
+        if (_loading && _items.isEmpty)
+          const Padding(
+              padding: EdgeInsets.symmetric(vertical: 26),
+              child: Center(child: CircularProgressIndicator()))
+        else if (_error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Row(
+              children: [
+                // 就地给一颗重试：这句错误光写在那里，她能做的只有把整页下拉一遍，
+                // 而那一下把五块内容一起重取。
+                Expanded(
+                  child: Text('${widget.title}没拉到：$_error',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.primary)),
+                ),
+                TextButton(onPressed: _load, child: const Text('重试', style: TextStyle(fontSize: 13))),
+              ],
+            ),
+          )
+        else if (_items.isNotEmpty)
+          SizedBox(
+            height: widget.height,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: _items.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 12),
+              itemBuilder: (context, i) => widget.tile(context, _items[i], _items),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// 一碟一格：封面、碟名、歌手。点开是专辑页 —— 那儿才有整张碟的曲目。
+class _AlbumCard extends StatelessWidget {
+  final AlbumInfo album;
+  const _AlbumCard({required this.album});
+
+  static const _side = 108.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: _side,
+      child: GestureDetector(
+        // 整格都认点击：她眼睛盯着的是碟名，手指也点在那儿。
+        behavior: HitTestBehavior.opaque,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => AlbumPage(albumId: album.id, seedName: album.name)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CoverTile(label: '', imageUrl: album.pic, size: _side, seedText: album.name),
+            const SizedBox(height: 4),
+            Text(album.name,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+            Text(
+                [
+                  if (album.artist.isNotEmpty) album.artist,
+                  if (album.publishYear.isNotEmpty) album.publishYear,
+                ].join(' · '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 一格歌手：圆头像加名字。点开是歌手页，热歌和他的碟都在那儿。
+class _ArtistCard extends StatelessWidget {
+  final ArtistInfo artist;
+  const _ArtistCard({required this.artist});
+
+  static const _side = 72.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: _side + 10,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => ArtistPage(artistId: artist.id, seedName: artist.name)),
+        ),
+        child: Column(
+          children: [
+            ClipOval(
+              child: CoverTile(
+                  label: '', imageUrl: artist.pic, size: _side, icon: Icons.person_outline),
+            ),
+            const SizedBox(height: 5),
+            SizedBox(
+              width: _side + 10,
+              child: Text(artist.name,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11.5)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _SheetCategories extends StatefulWidget {
@@ -218,7 +638,7 @@ class _SheetCategoriesState extends State<_SheetCategories> {
   bool _loading = false;
   bool _swapping = false;
 
-  /// 「全部分类」摊开没有：57 个词全常驻的话，歌单本身就被挤到看不见的地方，
+  /// 「全部分类」摊开没有：70 个词全常驻的话，歌单本身就被挤到看不见的地方，
   /// 所以它只是一块挑分类用的临时面板，挑中谁就自己收起。
   bool _catsOpen = false;
 
@@ -226,6 +646,7 @@ class _SheetCategoriesState extends State<_SheetCategories> {
   /// 分开记免得换分类时拿上一次的游标去问下一类。
   int _offset = 0;
   int _page = 1;
+
   String? _error;
 
   /// 连点几个分类就是几趟并发请求，回来的先后看网络：只认最后发起的那一趟。
@@ -320,7 +741,7 @@ class _SheetCategoriesState extends State<_SheetCategories> {
     }
   }
 
-  /// 挑一个分类。面板是临时摊开的那一块，选完就收起——不然 57 颗胶囊继续压在
+  /// 挑一个分类。面板是临时摊开的那一块，选完就收起——不然 70 颗胶囊继续压在
   /// 歌单上面，下一屏还是看不到歌单。
   void _pick(String c) {
     if (c == _category) {
@@ -438,8 +859,9 @@ class _ExpandChip extends StatelessWidget {
   }
 }
 
-/// 「全部分类」摊开的那一块。词表是端内带的（网易云那三个分类树接口匿名全 404），
-/// 每个词都实测回得到歌单；挑中谁由外面把面板收起。
+/// 「全部分类」摊开的那一块。词表是端内带的（抄的是官方分类树 `/api/playlist/catalogue`
+/// 给的那 70 个词，但每个词都还得自己打一次 `/api/playlist/list` 验过——未知分类网易云
+/// 不报错，直接回一张兜底歌单，看不出来）；挑中谁由外面把面板收起。
 class _CategoryPanel extends StatelessWidget {
   final String current;
   final ValueChanged<String> onPick;
@@ -483,19 +905,25 @@ class _CatChip extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        alignment: Alignment.center,
-        // 竖向只留 4：这一排钉在 34 高里，系统字号调大一档的话， padding 给到 6
-        // 就要开始啃掉名字的头一笔。
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        // 不能用 Container(alignment:)：alignment 会让 Container 撑满给到的宽度，
+        // 而「全部分类」那块面板就是把这枚胶囊摆进 Wrap 里的 —— 撑满之后一行只放得下
+        // 一颗，70 个词竖着排成两屏多大按钮。Row(mainAxisSize: min) 两边都收着长，
+        // 又被横向那一排钉在 34 高里时照样把字居中。
         decoration: BoxDecoration(
           color: active ? AppTheme.primary : AppTheme.sheetBg,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: Text(name,
-            style: TextStyle(
-                fontSize: 12.5,
-                color: active ? Colors.white : AppTheme.textPrimary,
-                fontWeight: active ? FontWeight.w600 : FontWeight.normal)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(name,
+                style: TextStyle(
+                    fontSize: 12.5,
+                    color: active ? Colors.white : AppTheme.textPrimary,
+                    fontWeight: active ? FontWeight.w600 : FontWeight.normal)),
+          ],
+        ),
       ),
     );
   }

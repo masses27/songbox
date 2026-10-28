@@ -1,4 +1,4 @@
-// Fix per-plugin JVM target mismatches: legacy Android plugins (e.g. flutter_js)
+// Fix per-plugin JVM target mismatches: legacy Android plugins
 // ship kotlinOptions=1.8 while their Java targetCompatibility is 11 (AGP default),
 // which Gradle 8 / AGP 8+ rejects. Sync each library subproject's Kotlin jvmTarget
 // to whatever its Java compile target ended up as.

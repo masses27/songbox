@@ -28,8 +28,23 @@ const _overseasKeys = [
 ];
 
 List<RankGroup> groupRanks(List<RankInfo> ranks) {
-  final main = <RankInfo>[], style = <RankInfo>[], overseas = <RankInfo>[], other = <RankInfo>[];
+  // 接口自己分了组的（QQ 那张总表）照它的分，顺序也按它给的范围走。
+  final named = <String, List<RankInfo>>{};
+  final guess = <RankInfo>[];
   for (final r in ranks) {
+    final g = r.group?.trim() ?? '';
+    if (g.isEmpty) {
+      guess.add(r);
+    } else {
+      (named[g] ??= []).add(r);
+    }
+  }
+  if (guess.isEmpty && named.isNotEmpty) {
+    return [for (final e in named.entries) RankGroup(e.key, e.value)];
+  }
+
+  final main = <RankInfo>[], style = <RankInfo>[], overseas = <RankInfo>[], other = <RankInfo>[];
+  for (final r in guess) {
     final n = r.name.trim();
     if (_mainNames.contains(n)) {
       main.add(r);
@@ -42,6 +57,7 @@ List<RankGroup> groupRanks(List<RankInfo> ranks) {
     }
   }
   final groups = [
+    for (final e in named.entries) RankGroup(e.key, e.value),
     RankGroup('官方主榜', main),
     RankGroup('风格榜', style),
     RankGroup('海外榜', overseas),

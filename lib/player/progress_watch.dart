@@ -72,6 +72,56 @@ enum WatchAction {
   /// 放到头了却没收到播完回执：按「这一首放完了」放行。
   trackEnd,
 
-  /// 中途再没往前走：按断流收拾（重取一条地址 → 等一等重试 → 报错并往前走）。
+  /// 中途再没往前走：按断流收拾（等一等再放同一首 → 扔掉这条地址重取 → 报错并往前走）。
   starved,
+}
+
+/// 把「这一首最后听到哪儿」拿在手里的这一小块。
+///
+/// 只认往前走的位置：内核在播完那一下会把 position 清回零（playing 却还留着 true），
+/// 跟着它写就等于把「听到 3:58」记成「听到 0:00」——续播会从头放同一首，盯进度的表
+/// 也再也认不出这是放到了头。
+///
+/// 但「只往上走」这一条本身不够：往前走的幅度还得跟墙上时钟对得上。一秒之内冒出
+/// 3:58 的那一步不是进度，是脏值（上一条流还没换干净的位置、或者内核报晚了）。
+/// 原来这里没有闸，脏值一旦挤进来就再也退不出去，屏幕上于是「永远贴在末尾」，
+/// 六秒后按「放完了」切下一首 —— 而她听到的是「只播一点点就自己跳歌」。后台最容易
+/// 撞上：装载慢、事件报得稀，起播那一刻手里还攥着上一首末尾的位置正好是这一秒。
+class ProgressRatchet {
+  ProgressRatchet({
+    this.tolerance = const Duration(seconds: 3),
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
+
+  /// 墙上时钟之外还愿意多给的余量：事件报晚半秒、缓冲一次补进两秒，这些都算正常推进。
+  final Duration tolerance;
+
+  final DateTime Function() _clock;
+
+  Duration _value = Duration.zero;
+
+  /// 上一个被认下来的点是什么时候报上来的：往前能走多远，按它算。
+  DateTime _at = DateTime.now();
+
+  Duration get value => _value;
+
+  /// 换了一首、拖了进度条、或者单曲循环重开：起点就是这里给的数。
+  /// 续播那一趟要带 `resume` 而不是零 —— 不然第一个报上来的 2:13 会被当成
+  /// 一步跨了两分钟的脏值挡在门外，往后每一跳都进不来。
+  void start(Duration at) {
+    _value = at;
+    _at = _clock();
+  }
+
+  /// 报上来一个点。认下来返回 true；往后退的、一步跨得比时间还多的不收。
+  /// [speed] 是倍速：2 倍速下声音真的会比墙上时钟快一倍，不乘上去会把正常推进挡掉。
+  bool note(Duration reported, {double speed = 1.0}) {
+    if (reported <= _value) return false;
+    final now = _clock();
+    final allowed = now.difference(_at) * speed + tolerance;
+    if (reported - _value > allowed) return false;
+    _value = reported;
+    _at = now;
+    return true;
+  }
 }

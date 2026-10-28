@@ -12,7 +12,6 @@ import 'ui/pages/builtin_library.dart';
 import 'ui/pages/log_page.dart';
 import 'player/player_service.dart';
 import 'settings/app_settings.dart';
-import 'source/source_manager.dart';
 import 'util/app_log.dart';
 import 'util/boot_failures.dart';
 import 'util/humanize.dart';
@@ -54,7 +53,6 @@ Future<void> main() async {
   // 白屏上，而她看到的「收藏是空的」背后其实根本没走到记日志那一步。
   await Future.wait([
     _boot('设置', () => AppSettings.instance.init()),
-    _boot('音源', () => SourceManager.instance.init()),
     _boot('曲库', () => LibraryStore.instance.init()),
     _boot('日志', () => AppLog.init()),
   ]);
@@ -77,19 +75,6 @@ Future<void> main() async {
       scanVip: BuiltinLibrary.instance.scanVipSongs,
     )
     ..start();
-  // 音源脚本要在 QuickJS 里跑完初始化，最长等 20s。放后台激活，首屏不该停在
-  // 白屏上——网易云直连的曲子不依赖它，先让用户进得去。
-  final activeId = SourceManager.instance.activeSourceId;
-  if (activeId != null) {
-    // 交给 SourceManager 存着：后台自动换脚本要先等这次激活读完文件。
-    SourceManager.instance.activation = () async {
-      try {
-        await SourceManager.instance.activate(activeId);
-      } catch (e) {
-        AppLog.add('源', '音源脚本激活失败，端内直连照常可用：${humanizeError(e)}');
-      }
-    }();
-  }
   runApp(
     MultiProvider(
       providers: [
@@ -97,7 +82,6 @@ Future<void> main() async {
         ChangeNotifierProvider(create: (_) => LibraryStore.instance),
         ChangeNotifierProvider(create: (_) => DownloadManager.instance),
         ChangeNotifierProvider(create: (_) => PlayerService.instance),
-        Provider(create: (_) => SourceManager.instance),
       ],
       child: const LyricApp(),
     ),
@@ -151,7 +135,6 @@ class _LyricAppState extends State<LyricApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
       LibraryStore.instance.flushNow();
-      SourceManager.instance.flushNow();
     }
     // 从下拉菜单/最近任务回到应用时补看一次播放卡：被系统抹掉的那一种不会自己回来，
     // 这里发现就顺手重贴，不用她去设置页找按钮。
@@ -194,9 +177,6 @@ class _MainShellState extends State<MainShell> {
   int _seenErrorTick = 0;
   int _seenNoticeTick = 0;
   int _seenCardTick = 0;
-  /// 后台自检那一班：开屏 8 秒后跑第一次，之后每半天一次，由 [_runStartupChecks] 自己续排。
-  Timer? _startupTimer;
-  static const _checksInterval = Duration(hours: 12);
 
   // 三个 tab 各自一个 key：再点当前那个要能把「回到顶部」递到页面里。
   final _homeKey = GlobalKey();
@@ -207,8 +187,6 @@ class _MainShellState extends State<MainShell> {
   void initState() {
     super.initState();
     PlayerService.instance.addListener(_onPlayerChanged);
-    // 开屏那几秒是首屏取链和音源初始化在抢网络，体检和脚本更新排在它们后面跑。
-    _startupTimer = Timer(const Duration(seconds: 8), _runStartupChecks);
     // 冷启动哪块存储没读出来，第一帧之后一次性说一声。空列表和「读坏了」在界面上
     // 长得一模一样，不吭声她只会以为这版把收藏弄丢了。
     if (BootFailures.hasAny) {
@@ -227,18 +205,8 @@ class _MainShellState extends State<MainShell> {
 
   @override
   void dispose() {
-    _startupTimer?.cancel();
     PlayerService.instance.removeListener(_onPlayerChanged);
     super.dispose();
-  }
-
-  /// 半天一次的内置音源自动换新。后台活，不开口。
-  Future<void> _runStartupChecks() async {
-    // 这个进程可以活很多天（后台播放让系统不回收它），只跑开屏那一次的话，
-    // 「半天一次」实际上变成「每次冷启动一次」。所以进来就先把下一班排上，
-    // 后面的早退不会漏掉重排。
-    _startupTimer = Timer(_checksInterval, _runStartupChecks);
-    unawaited(SourceManager.instance.autoRefreshIfStale());
   }
 
   /// Playback failures surface here instead of at each of the call sites that

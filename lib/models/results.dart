@@ -59,7 +59,11 @@ class RankInfo {
   /// 一句话说明（「每天更新 100 首」这类），卡片副标题用。
   final String? desc;
 
-  const RankInfo(this.source, this.id, this.name, {this.img, this.desc});
+  /// 接口自己带的分组名（QQ 榜单总表就是巅峰榜/地区榜/特色榜/全球榜四组）。
+  /// 有它的就别再按名字猜了：猜的那套词表是按网易云的榜名写的。
+  final String? group;
+
+  const RankInfo(this.source, this.id, this.name, {this.img, this.desc, this.group});
 
   factory RankInfo.fromJson(Map<String, dynamic> j) {
     final img = (j['img'] ?? j['coverImgUrl'] ?? j['coverImageUrl'] ?? j['picUrl'])?.toString();

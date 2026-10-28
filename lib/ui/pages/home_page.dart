@@ -13,7 +13,6 @@ import 'daily_page.dart';
 import 'rank_detail_page.dart';
 import 'search_page.dart';
 import 'sheet_detail_page.dart';
-import 'sources_page.dart';
 
 /// 首页 — NetEase-style landing: recommendations, new songs, rankings.
 class HomePage extends StatefulWidget {
@@ -209,7 +208,6 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
             child: _QuickGrid(
               onOpenTab: widget.onOpenTab,
               onDaily: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const DailyPage())),
-              onSources: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SourcesPage())),
             ),
           ),
           if (_error != null && _nothingOnScreen)
@@ -393,29 +391,8 @@ class _SongCarousel extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: items.length,
         separatorBuilder: (_, _) => const SizedBox(width: 12),
-        itemBuilder: (context, i) {
-          final s = items[i];
-          return SizedBox(
-            width: 96,
-            child: GestureDetector(
-              // 整格都能点。原来只有上面那张封面认点击，歌名、歌手那两行按下去
-              // 什么也不发生——她眼睛盯着的是字，手指也点在那儿。
-              behavior: HitTestBehavior.opaque,
-              onTap: () => onTap(s, items),
-              onLongPress: () => showSongMenu(context, s, siblings: items),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  CoverTile(label: '', imageUrl: s.pic, size: 96),
-                  const SizedBox(height: 4),
-                  Text(s.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-                  Text(s.singer, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                ],
-              ),
-            ),
-          );
-        },
+        itemBuilder: (context, i) =>
+            SongCard(song: items[i], batch: items, onTap: onTap),
       ),
     );
   }
@@ -471,12 +448,11 @@ class _RankRow extends StatelessWidget {
   }
 }
 
-/// 首屏四宫格：把每天真正会点这四件事摆在搜索框下面，不用先翻推荐。
+/// 首屏宫格：把每天真正会点这三件事摆在搜索框下面，不用先翻推荐。
 class _QuickGrid extends StatelessWidget {
   final ValueChanged<int> onOpenTab;
   final VoidCallback onDaily;
-  final VoidCallback onSources;
-  const _QuickGrid({required this.onOpenTab, required this.onDaily, required this.onSources});
+  const _QuickGrid({required this.onOpenTab, required this.onDaily});
 
   @override
   Widget build(BuildContext context) {
@@ -484,7 +460,6 @@ class _QuickGrid extends StatelessWidget {
       _Tile(icon: Icons.auto_awesome, tint: AppTheme.tile(const Color(0xFFFFF1E0)), label: '今日私荐', onTap: onDaily),
       _Tile(icon: Icons.leaderboard, tint: AppTheme.tile(const Color(0xFFFFE7E7)), label: '排行榜', onTap: () => onOpenTab(1)),
       _Tile(icon: Icons.favorite_border, tint: AppTheme.tile(const Color(0xFFFCE7EF)), label: '我的收藏', onTap: () => onOpenTab(2)),
-      _Tile(icon: Icons.cloud_outlined, tint: AppTheme.tile(const Color(0xFFE8F1FF)), label: '音源管理', onTap: onSources),
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 4, 10, 2),

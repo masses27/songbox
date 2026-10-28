@@ -9,7 +9,7 @@ import '../util/json_body.dart';
 
 /// QQ Music (tx) song search.
 ///
-/// 这个模块的存在意义是「不装第三方音源也能换源」：搜索、取链、歌词全部端内直连，
+/// 换源那一步用的 QQ 曲库入口：搜索、取链、歌词全部端内直连，
 /// 网易云撞墙的歌可以直接在 QQ 曲库里找同名版本。
 class TxSearch {
   static final Dio _dio = Dio(BaseOptions(

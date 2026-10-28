@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import '../../engine/lx_engine.dart';
 import '../../library/library_store.dart';
 import '../../models/song.dart';
 import '../../models/results.dart';
@@ -10,6 +9,7 @@ import '../../music_sdk/kw_leaderboard.dart';
 import '../../music_sdk/kw_native.dart';
 import '../../music_sdk/kw_search.dart';
 import '../../music_sdk/kg_native.dart';
+import '../../music_sdk/tx_leaderboard.dart';
 import '../../music_sdk/tx_native.dart';
 import '../../music_sdk/tx_search.dart';
 import '../../music_sdk/wy_catalog.dart';
@@ -22,9 +22,10 @@ import '../../util/memo.dart';
 
 /// Built-in music library: search / ranks / sheets.
 ///
-/// The lx-music protocol sources only supply play URLs (musicUrl action);
-/// catalog search results come from this library. It mirrors lx-music-mobile's
-/// musicSdk modules (kw/kg/tx/wy/mg).
+/// Every playable URL here is fetched on-device; nothing depends on a
+/// third-party source script. Catalog search is in-app too (wy/kw/tx/bl/kg).
+/// It mirrors lx-music-mobile's musicSdk modules for the parts that work
+/// anonymously.
 class BuiltinLibrary {
   static final BuiltinLibrary instance = BuiltinLibrary._();
   BuiltinLibrary._();
@@ -32,7 +33,7 @@ class BuiltinLibrary {
   /// 目录缓存：榜单、推荐位这些一次要一两秒。
   final _catalog = Memo(ttl: const Duration(minutes: 5));
 
-  /// 播放链接缓存。签名或音源脚本一次要 1~2 秒，而同一首歌经常几秒内被再次点开
+  /// 播放链接缓存。签名一次要一两秒，而同一首歌经常几秒内被再次点开
   /// （点两次列表项、上一首/下一首绕回来）。链接十几分钟就过期，所以窗口压到 3 分钟。
   final _urls = Memo(ttl: const Duration(minutes: 3));
 
@@ -120,6 +121,8 @@ class BuiltinLibrary {
             return WyLeaderboard().list;
           case 'kw':
             return KwLeaderboard().list;
+          case 'tx':
+            return TxLeaderboard().list;
           default:
             throw Exception('榜单源 $source 尚未移植');
         }
@@ -132,6 +135,8 @@ class BuiltinLibrary {
             return WyLeaderboard().getList(rankId, page: page);
           case 'kw':
             return KwLeaderboard().getList(rankId, page: page);
+          case 'tx':
+            return TxLeaderboard().getList(rankId, page: page);
           default:
             throw Exception('榜单源 $source 尚未移植');
         }
@@ -145,13 +150,34 @@ class BuiltinLibrary {
   Future<List<Song>> recommendedSongs({int limit = 30}) =>
       _catalog.run('newsong-$limit', () => WyCatalog.recommendedSongs(limit: limit));
 
+  /// 发现页那排地区胶囊（接口词 → 界面上的字）。
+  Map<String, String> get albumAreas => WyCatalog.albumAreas;
+
+  /// 新碟上架。地区和页码都要进缓存键：不带 area 的话切到「日语」拿回来的还是
+  /// 「全部」那批，不带 limit 的话「换一批」会拿到上一批的窗口。
+  Future<List<AlbumInfo>> newAlbums({String area = 'ALL', int page = 1, int limit = 12}) =>
+      _catalog.run('new-albums-$area-$page-$limit',
+          () => WyCatalog.newAlbums(area: area, page: page, limit: limit));
+
+  /// 热门歌手：认 offset，所以键带页码。
+  Future<List<ArtistInfo>> topArtists({int page = 1, int limit = 12}) =>
+      _catalog.run('top-artists-$page-$limit',
+          () => WyCatalog.topArtists(page: page, limit: limit));
+
+  /// 新歌速递：接口一次给满 100 首、不认 offset，所以只有一个键，
+  /// 「换一批」由界面在这 100 首里切窗口。
+  Future<List<Song>> freshSongs() => _catalog.run('fresh-songs', WyCatalog.freshSongs);
+
   /// 发现页横向那一排的常用分类。
   List<String> get sheetCategories => WyCatalog.quickCategories;
 
   /// 「全部分类」面板用的分组词表（语种/风格/场景/情感/主题）。
   List<SheetCategoryGroup> get sheetCategoryGroups => WyCatalog.categoryGroups;
 
-  Future<List<SheetInfo>> sheets(String source, String category, {int page = 1, int limit = 30}) {
+  /// 分类歌单。排序永远按接口那套「热门」答，界面上不给开关：
+  /// 2026-10-29 实测它的 `collect` 并非按收藏数排，摆出来是一颗会说谎的按钮。
+  Future<List<SheetInfo>> sheets(String source, String category,
+      {int page = 1, int limit = 30}) {
     if (source != 'wy') throw Exception('歌单分类目前只支持网易云曲库');
     return _catalog.run('hot-$category-$page-$limit',
         () => WyCatalog.hotSheets(category, page: page, limit: limit));
@@ -174,8 +200,8 @@ class BuiltinLibrary {
   ///
   /// 复用原曲那张表在两处会错：
   /// - 会员墙那一步把 128k 从表里砍掉了（网易云三档一起挡，多问一遍只是白等），
-  ///   可酷我这类音源脚本常见只有 128k：拿砍过的表去问它们，永远问不到它们唯一
-  ///   有的那一档，还要顺手打一周的「这首确实没有免费版」。
+  ///   可候选那边不一定有这一刀：拿砍过的表去问它，永远问不到它唯一有的那一档，
+  ///   还要顺手打一周的「这首确实没有免费版」。
   /// - B 站、酷狗匿名整首各只给一个档位（`bl` 192k、`kg` 128k）：搜索回来的那个哈希
   ///   就是按那一档存的文件，问第二遍只是把同一条接口再打一次；整单体检并发跑的时候，
   ///   多出来的那一次就是撞限流的额度。
@@ -193,20 +219,19 @@ class BuiltinLibrary {
   /// 整条链子的时间上限。播放那边是 30 秒总超时，这里留出收尾的余量。
   static const _chainBudget = Duration(seconds: 22);
 
-  /// 单次尝试最多愿意等多久（音源脚本正常一两秒就回，等太久的那次多半也不会成）。
+  /// 单次尝试最多愿意等多久（正常的取链一两秒就回，等太久的那次多半也不会成）。
   static const _tryBudget = Duration(seconds: 10);
 
-  /// 端内自己就能取链的平台：这些歌没启用音源脚本也有一条出声的路。
-  /// 判据要跟 [_attempt] 里的分支对上，漏一个就等于这类歌白跑一趟换源。
+  /// 端内自己就能取到整首的平台。判据要跟 [_attempt] 里的分支对上：
+  /// 漏一个就等于这类歌白跑一趟换源，多写一个就会真发一次注定失败的请求。
   static const inAppSources = {'wy', 'tx', 'bl', 'kg'};
 
   /// Resolve a playable URL by walking an attempt chain: whatever the app can
-  /// fetch on-device goes first, then the enabled lx-music source picks up
-  /// anything the direct path could not deliver. A quality that comes back
-  /// empty steps down a tier and runs both paths again, and if the whole song
-  /// is locked, the same track is looked for on the other platform. Only when
-  /// every one of those shots fails does the caller see an error — each stage
-  /// contributes a line to the failure report.
+  /// fetch on-device goes first. A quality that comes back empty steps down a
+  /// tier and runs it again, and if the whole song is locked, the same track is
+  /// looked for on the other platforms. Only when every one of those shots
+  /// fails does the caller see an error — each stage contributes a line to the
+  /// failure report.
   Future<String> resolveUrl(Song song, String quality) async {
     final F = _Failures();
     final deadline = DateTime.now().add(_chainBudget);
@@ -229,31 +254,26 @@ class BuiltinLibrary {
     }
 
     // fee=1 的歌在网易云端内是匿名请求，实测三档全部拿不到链接，降档只是把同一句
-    // 「VIP 专属」再问一遍。直连整条跳掉，只留两档给音源脚本试。
-    var ladder = _qualityLadder(quality);
-    if (song.needsVip) ladder = ladder.take(2).toList();
-    final engine = LxEngine.active;
-    final hasEngine = engine != null && engine.inited;
-    final direct = inAppSources.contains(song.source);
-
-    if (direct && song.needsVip) {
+    // 「VIP 专属」再问一遍。直连整条跳掉，一步到位去换源。
+    final ladder = _qualityLadder(quality);
+    if (song.needsVip) {
       F.add('端内直连：VIP 专属（网易云这首要会员，直接去换源）');
-    } else if (!direct && !hasEngine) {
-      F.add('音源：尚未启用（可在「音源」页启用一个）');
+    } else if (!inAppSources.contains(song.source)) {
+      // 酷我的歌：端内只剩搜索和歌词，取链那条接口给的是 11 秒带水印的试听片段，
+      // 放它出来比放不出更糟。所以这一首自己一步都不试，直接去别的曲库找同一首。
+      F.add('酷我：端内只有搜索和歌词，要去别的曲库找同一首');
     } else {
       for (final q in ladder) {
         final url = await _attempt(song, q, F, deadline);
         if (url != null) return url;
         // 只有一档的平台（B 站 192k、酷狗 128k），退音质只是把同一条接口再问一遍。
         if (_oneShotTier.containsKey(song.source)) break;
-        // 这个音源压根不覆盖该平台，降音质也只是把同一句「不支持」再问一遍。
-        if (!direct && !_supports(engine!, song.source)) break;
         if (DateTime.now().isAfter(deadline)) break;
       }
     }
 
     // 会员墙后面往往就是另一平台的免费版；网易云自己的热单能省一半，靠的是这一步。
-    for (final twin in await _findTwins(song, F, engine: engine, deadline: deadline)) {
+    for (final twin in await _findTwins(song, F, deadline: deadline)) {
       for (final q in twinLadder(twin, quality)) {
         final url = await _attempt(twin, q, F, deadline, prefix: '换源 ${sourceName(twin.source)}：');
         if (url != null) {
@@ -350,9 +370,9 @@ class BuiltinLibrary {
     final F = _Failures();
     final deadline = DateTime.now().add(const Duration(seconds: 18));
     final quality = AppSettings.instance.quality;
-    for (final twin in await _findTwins(song, F, engine: LxEngine.active, deadline: deadline)) {
+    for (final twin in await _findTwins(song, F, deadline: deadline)) {
       // 档位按候选判（和 resolveUrl 那条链子同一个条件）：只问设置里那一档，
-      // 只有 128k 的那类脚本就永远问不到，体检完还要顺手打上「确实没有免费版」。
+      // 只有 128k 的那两家就永远问不到，体检完还要顺手打上「确实没有免费版」。
       for (final q in twinLadder(twin, quality)) {
         final url = await _attempt(twin, q, F, deadline, prefix: '体检 ${sourceName(twin.source)}：');
         if (url != null) {
@@ -368,14 +388,20 @@ class BuiltinLibrary {
     return false;
   }
 
-  /// 一首歌、一个音质：先端内直连，再交给启用的音源。两条都不通返回 null。
+  /// 一首歌、一个音质：走端内那几条直连。拿不到返回 null，原因已经记进台账。
   Future<String?> _attempt(Song song, String quality, _Failures F, DateTime deadline,
       {String prefix = ''}) async {
     final budget = _remaining(deadline);
     if (budget == null) return null;
+    if (!inAppSources.contains(song.source)) {
+      // 能走到这一格的只有「上次记住的版本」：她机器上那条记录可能是酷我那一首，
+      // 当年还有音源脚本能替它取整首。那条路已经拆了，一句话交代完就走，
+      // 别真发一次注定失败的请求出去。
+      F.add('$prefix酷我：端内只有搜索和歌词，没有取整首的路');
+      return null;
+    }
     if (song.source == 'bl') {
-      // B 站这条只有一档（匿名 192k 整首），音质在这儿不是变量；它也不归音源脚本管，
-      // 拿 bl 去问脚本只会多等一次「不覆盖这个平台」。
+      // B 站这条只有一档（匿名 192k 整首），音质在这儿不是变量。
       try {
         return await BlSource.resolveUrl(song.songmid).timeout(budget);
       } catch (e) {
@@ -405,34 +431,11 @@ class BuiltinLibrary {
     }
     if (song.source == 'kg') {
       // 酷狗这条也只有一档：搜索回的那个哈希就是 128k 那一份文件，音质在这儿不是变量。
-      // 它跟 B 站不一样的地方在收尾：取不到还想让启用的音源再试一次——有些脚本确实覆盖
-      // kg 曲库，而这条链子直接失败就多一次机会。
       try {
         return await KgNative.resolveUrl(song.songmid).timeout(budget);
       } catch (e) {
         F.addError('$prefix酷狗整首：', e, brief: e is TimeoutException ? '等待超时' : null);
       }
-    }
-    final engine = LxEngine.active;
-    if (engine == null || !engine.inited) {
-      F.add('$prefix音源：尚未启用（可在「音源」页启用一个）');
-      return null;
-    }
-    if (!_supports(engine, song.source)) {
-      F.add('$prefix音源：这个音源不覆盖 ${sourceName(song.source)} 曲库');
-      return null;
-    }
-    try {
-      final result = await engine.sendRequest(song.source, 'musicUrl', {
-        'type': quality,
-        'musicInfo': song.toMusicInfo(),
-      }, timeout: budget);
-      final data = result['data'];
-      final url = data is Map ? data['url'] : data;
-      if (url is String && url.isNotEmpty) return url;
-      F.add('$prefix音源：未返回播放链接');
-    } catch (e) {
-      F.addError('$prefix音源：', e, brief: e is TimeoutException ? '等待超时' : null);
     }
     return null;
   }
@@ -444,25 +447,16 @@ class BuiltinLibrary {
     return left.compareTo(_tryBudget) > 0 ? _tryBudget : left;
   }
 
-  static bool _supports(LxEngine engine, String source) {
-    final s = engine.support;
-    if (s == null) return true; // 老脚本没报能力表，那就照原来的样子问一次
-    return s.sources.contains(source) && (s.actions[source]?.contains('musicUrl') ?? false);
-  }
-
-  /// 搜索这一步端内自己就能发的平台。和 [inAppSources] 不是同一张表：
-  /// 酷我能搜但取链只给 11 秒试听（要靠音源脚本），B 站、酷狗能搜也能出整首。
-  /// 漏在这里加一个平台，等于换源候选列表里永远不会出现它。
-  static const _nativeSearchSources = {'wy', 'kw', 'tx', 'bl', 'kg'};
-
   /// 换源候选：网易云自己库里同一首歌常有第二条不花钱的 id（精选集、重新上架），
-  /// 先试它，再试 QQ、酷我，最后是 B 站、酷狗这两条「匿名整首」。
+  /// 先试它，再试 QQ，最后是 B 站、酷狗这两条「匿名整首」。
   /// 返回最多两条，调用方按顺序逐条取链。
   ///
-  /// [deadline] 是调用方那条链子的时间预算：找候选这一步本身要发五六个搜索请求，
+  /// 候选只从 [inAppSources] 那几家里挑。酷我的名额已经撤掉：它端内取不到整首，
+  /// 占进去的那一条等于白等一次失败，还会把一家能播的候选挤出这两格。
+  ///
+  /// [deadline] 是调用方那条链子的时间预算：找候选这一步本身要发四五个搜索请求，
   /// 预算用完了还继续发，拿回来的候选也来不及取链，白白多撞几次平台的频率限制。
-  Future<List<Song>> _findTwins(Song song, _Failures F,
-      {required LxEngine? engine, DateTime? deadline}) async {
+  Future<List<Song>> _findTwins(Song song, _Failures F, {DateTime? deadline}) async {
     final keyword = '${song.name} ${song.singer}'.trim();
     if (keyword.isEmpty) return const [];
     final out = <Song>[];
@@ -470,10 +464,6 @@ class BuiltinLibrary {
       if (out.length >= 2) return;
       if (deadline != null && DateTime.now().isAfter(deadline)) return;
       final label = sourceName(target);
-      if (!_nativeSearchSources.contains(target) &&
-          (engine == null || !engine.inited || !_supports(engine, target))) {
-        return;
-      }
       try {
         final picked = target == 'bl'
             // B 站的门槛写在 BlSource 里：标题得同时出现曲名和歌手，明写了翻唱、伴奏、
@@ -481,7 +471,6 @@ class BuiltinLibrary {
             ? await BlSource.findTwins(song.name, song.singer, wantSec: song.interval, max: 2 - out.length)
             : pickTwins(
                 switch (target) {
-                  'kw' => (await KwSearch().search(keyword, limit: 10)).list,
                   'tx' => (await TxSearch().search(keyword, limit: 10)).list,
                   'kg' => await KgNative.searchSongs(keyword, limit: 10),
                   _ => (await WySearch().search(keyword, limit: 10)).list,
@@ -496,13 +485,12 @@ class BuiltinLibrary {
       }
     }
 
-    // 撞在会员墙后面的歌，端内和 QQ 都要会员、酷我只给 11 秒试听，还肯匿名出整首、
-    // 命中又高的只有 B 站：这种歌把它排第一个，省下的是她等换源的那几秒。判据用
-    // `twinBlocked`——QQ 的会员歌撞的是同一堵墙，按网易云算的话那一半还是最后才轮到 B 站。
+    // 撞在会员墙后面的歌，端内和 QQ 都要会员，还肯匿名出整首、命中又高的只有 B 站：
+    // 这种歌把它排第一个，省下的是她等换源的那几秒。判据用 `twinBlocked`——QQ 的
+    // 会员歌撞的是同一堵墙，按网易云算的话那一半还是最后才轮到 B 站。
     if (song.twinBlocked) await searchOn('bl');
     if (song.source == 'wy') await searchOn('wy');
-    // QQ 匿名就能出整首 128k，所以排在酷我前面——酷我那条接口现在只给 11 秒试听。
-    for (final t in ['tx', 'kw', 'wy']) {
+    for (final t in ['tx', 'wy']) {
       if (t != song.source) await searchOn(t);
     }
     if (!song.twinBlocked) await searchOn('bl');
@@ -516,11 +504,12 @@ class BuiltinLibrary {
   /// 「找其他版本」列表：同一首歌在网易云的其他版本（现场、Live、翻唱、remix），
   /// 以及另一平台的同名。判定比自动换源松得多——这里由她本人挑，
   /// 自动换源怕「放错了」所以只认同一版本。
+  ///
+  /// 摆出来的每一条都得是她点下去就有声音的那类，所以只有能端内取整首的几家：
+  /// 酷我的行点开会走一次换源，运气好放出的是别家同名，运气不好就是一场空等。
   Future<List<Song>> otherVersions(Song song) async {
     final keyword = '${song.name} ${song.singer}'.trim();
     if (keyword.isEmpty) return const [];
-    final engine = LxEngine.active;
-    final canKw = engine == null || !engine.inited || _supports(engine, 'kw');
     final found = <Song>[];
     try {
       found.addAll((await WySearch().search(keyword, limit: 20)).list);
@@ -528,11 +517,6 @@ class BuiltinLibrary {
     try {
       found.addAll((await TxSearch().search(keyword, limit: 10)).list);
     } catch (_) {}
-    if (canKw) {
-      try {
-        found.addAll((await KwSearch().search(keyword, limit: 10)).list);
-      } catch (_) {}
-    }
     try {
       // 「这首放不出」的时候长按找版本，B 站那条整首也该摆在她能挑的列表里。
       found.addAll(await BlSource.findTwins(song.name, song.singer, wantSec: song.interval, max: 6));
@@ -680,13 +664,12 @@ class BuiltinLibrary {
     return s.length > 160 ? '${s.substring(0, 160)}…' : s;
   }
 
-  /// Same chain as [resolveUrl]: prefer what the app can fetch directly, then
-  /// let the enabled source fill the gap.
+  /// 歌词也只走端内直连：三家有自己的词接口，B 站和酷狗靠同一首的网易云条目配词。
   Future<LyricResult> resolveLyric(Song song) async {
     if (song.source == 'bl' || song.source == 'kg') {
       // 这两家只肯给整首音频，我们没有可匿名读的词接口（B 站本来就没有，酷狗那个要签名）。
       // 它就是同一首歌：拿曲名歌手去网易云搜一条对得上的来配词。
-      // 在这儿就收尾，是为了不再拿 bl/kg 去问音源脚本——那两个平台它本来就不覆盖。
+      // 到这儿就收尾——搜不到对得上的那条，这一首就是没词，再问别家也是白问。
       try {
         final found = (await WySearch().search('${song.name} ${song.singer}'.trim(), limit: 5)).list;
         final twin = pickTwin(found, song);
@@ -707,28 +690,7 @@ class BuiltinLibrary {
         if (direct.lyric.trim().isNotEmpty) return direct;
       } catch (_) {}
     }
-    final engine = LxEngine.active;
-    if (engine == null || !engine.inited) return LyricResult(lyric: '');
-    try {
-      final result = await engine.sendRequest(song.source, 'lyric', {
-        'id': song.id ?? song.songmid,
-        'name': song.name,
-        'singer': song.singer,
-        'duration': song.interval,
-        'source': song.source,
-      });
-      final data = result['data'];
-      if (data is Map) {
-        return LyricResult(
-          lyric: '${data['lyric'] ?? ''}',
-          tlyric: data['tlyric'] as String?,
-          rlyric: data['rlyric'] as String?,
-        );
-      }
-      return LyricResult(lyric: '');
-    } catch (_) {
-      return LyricResult(lyric: '');
-    }
+    return LyricResult(lyric: '');
   }
 }
 

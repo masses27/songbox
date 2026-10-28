@@ -80,6 +80,12 @@ class LyricParser {
 /// How the queue advances when a track reaches its end.
 enum PlayMode { list, single, random, none }
 
+/// 这一趟的声音是从哪一类来源开出来的（见 [PlayerService._origin]）。
+/// 三条自救的路各自只对其中一条对症：对本机那份说「重取一条地址」是句空话，
+/// 对现取的地址说「这份文件坏了」也一样，而预取那份既不该被当成网络地址来归因、
+/// 也不该在一次可有可无的断流里被删掉。
+enum PlayOrigin { local, prefetched, online }
+
 extension PlayModePresentation on PlayMode {
   String get label => switch (this) {
         PlayMode.list => '列表循环',
@@ -280,7 +286,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   String? _lastTrackEndKey;
   static const _endDebounce = Duration(seconds: 3);
 
-  /// 断流那一刻听到的位置。重试统一走 [playAt]，而它每次都要重下音源、从 00:00
+  /// 断流那一刻听到的位置。重试统一走 [playAt]，而它每次都要重新取链、从 00:00
   /// 起播 —— 已经听到 2:13 的歌在网络回来之后从头放，听感上就是这首歌被弄丢了。
   /// 记下时带上是哪一首：只有键对得上才用掉它，任何分支都不留残留，
   /// 免得下次切到别的歌接到旧位置上去。
@@ -302,17 +308,18 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// 一首真放不出的歌会在错误回调和重取之间来回弹，永远停不下来。
   int _sourceRetryGen = -1;
 
-  /// 这一首到底是从哪儿开出来的：她下载的那份文件、提前备好的那份，还是现取的地址。
+  /// 这一首是从哪儿开出来的：她下载的那份、提前备好的那份，还是现取的地址。
   /// 归因和自救都按这个走 —— 对着一份本地文件说「重试会重新取一条」是句空话，
   /// 而对着网络地址说「这份文件坏了」也一样。每次 [_sourceFor] 现写。
-  bool _fromLocalDownload = false;
+  PlayOrigin _origin = PlayOrigin.online;
 
   /// 本机那份被试过、放不出，这一趟就别再选它。只在本进程有效：文件不删，
   /// 下次冷启动还会先试它一次（多半只是那一回读盘或解码卡住，不该永久判死）。
   final Set<String> _localBusted = {};
 
   /// 断流时 [_ap] 的 position 有可能已经被清回零，所以边播边把最后听到的位置留着。
-  Duration _lastHeard = Duration.zero;
+  /// 只往上走，而且往前走的幅度要跟墙上时钟对得上（见 [ProgressRatchet]）。
+  final ProgressRatchet _heard = ProgressRatchet();
 
   /// 自然播完的那首已经在 [_onTrackEnd] 记过账，紧跟着那一次 [playAt] 别再把它
   /// 记成「听到一半跳走」—— 一次播放只该记一次。
@@ -428,12 +435,14 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     });
     _positionSub = _ap.positionStream.listen((p) {
       final alive = _ap.playing;
-      // 只认往前走的位置。桌面那个内核在「播完」这一下会把位置直接清回零（而
-      // playing 还留着 true），跟着它写就等于把「听到 3:58」记成「听到 0:00」：
-      // 续播会从头放同一首，兜底表也再也认不出这是放到了头 —— 转述出来正是
-      // 「挂着的时候不切下一首，只会这一首循环」。真正要往回走的两种情况自己会写：
-      // [seek] 按她的目标写，[playAt] 换歌时清零。
-      if (alive && p >= _lastHeard) _lastHeard = p;
+      // 报上来的点交给那只表记账：只认往前走、而且走得跟墙上时钟对得上的（规矩写在
+      // [ProgressRatchet]）。往后退的是内核在「播完」那一下把位置清回零（playing 还
+      // 留着 true），跟着它写就把「听到 3:58」记成「听到 0:00」——续播会从头放同一首，
+      // 兜底表也认不出这是放到了头，转述出来正是「挂着的时候不切下一首，只会这一首循环」。
+      // 一步跨得比时间还多的则是另一头：脏值进了那只表就退不出去，往后每一首都像
+      // 贴在末尾，六秒一跳就把队列推走。真正要往回走的两种情况自己会写：
+      // [seek] 按她的目标写，[playAt] 按这一首的起点写。
+      if (alive) _heard.note(p, speed: _speed);
       // 重连额度什么时候该重新发满，看的是「这一首连着播出去多少秒」，不是
       // 「这一次装载成功了没有」：装上了两秒就断，等于网络并没回来。
       if (alive) _netRetryBudget.notePlayed(p - _lastTickPos);
@@ -482,26 +491,35 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     if (_idleNotedKey == key) return;
     _idleNotedKey = key;
     // 位置存下来给「接着放」用；对不上这首歌，playAt 自己会把它当没这回事。
-    if (_lastHeard > Duration.zero) {
-      _resumeAt = _lastHeard;
+    if (_heard.value > Duration.zero) {
+      _resumeAt = _heard.value;
       _resumeKey = key;
     }
     notice = '「${_t(song)}」中途停了';
     noticeTick++;
-    AppLog.add('播', '播放器进 idle 且无报错：「${_t(song)}」（停在 ${_mm(_lastHeard)}）');
+    AppLog.add('播', '播放器进 idle 且无报错：「${_t(song)}」（${_witness()}）');
     notifyListeners();
   }
 
   /// 进度是不是已经到了这首歌的末尾（留 5 秒余量：各源报上来的 duration 常常比
   /// 真声长一点点）。没有时长的直播和总长不到 10 秒的碎片不判，宁可漏也别抢。
+  ///
+  /// 光「听到的位置贴在末尾」还不够，还得播放器自己也摆出放完的样子：要么真走到头，
+  /// 要么被内核清回零（0.8.37 记下的那种）。位置说在末尾、它却还停在半路，那是脏值，
+  /// 按它放行就是「只播一点点自己跳歌」。
   bool _looksFinished() {
     final t = total;
     if (t == null || t < const Duration(seconds: 10)) return false;
-    return _heardPos() >= t - const Duration(seconds: 5);
+    final end = t - const Duration(seconds: 5);
+    if (_heard.value < end) return false;
+    final raw = _ap.position;
+    return raw >= end || raw <= const Duration(seconds: 2);
   }
 
-  /// 最后听到的那个点。断流或收尾时播放器会把 position 清回零，所以两边取大的。
-  Duration _heardPos() => _lastHeard > _ap.position ? _lastHeard : _ap.position;
+  /// 日志里那一串取证：往前顶不动和真放完了，长得一模一样，差的常常就是这几个数。
+  String _witness() => '听到 ${_mm(_heard.value)}／缓冲 ${_mm(_ap.bufferedPosition)}／'
+      '总长 ${_mm(total ?? Duration.zero)}·${_ap.processingState.name}'
+      '${_ap.playing ? '·在放' : '·没放'}${_background ? '·后台' : ''}';
 
   /// 自己盯着进度的一只表，认两种「屏幕上写着在放、其实已经没声」：
   /// 放到头却没收到播完回执（队列就此停在最后一秒），和放到半路再没往前走过
@@ -526,34 +544,53 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (current == null || !_ap.playing) return;
     if (_ap.processingState == ProcessingState.completed) return; // 正主来了，那条路自己会走
-    final pos = _heardPos();
+    final pos = _heard.value;
     switch (_progress.tick(pos, finished: _looksFinished())) {
       case WatchAction.none:
         return;
       case WatchAction.trackEnd:
-        AppLog.add('播', '「${_t(current!)}」放到 ${_mm(pos)} 头了却没收到播完回执，自己接着走');
+        AppLog.add('播', '「${_t(current!)}」放到 ${_mm(pos)} 头了却没收到播完回执，自己接着走（${_witness()}）');
         _onTrackEnd();
       case WatchAction.starved:
         _recoverIfStarved(pos);
     }
   }
 
-  /// 半路停住不放的一种：没有异常、没有 idle、进度不再往前 —— 三条自救的路按
+  /// 一首歌连着几趟「停在半路不动」的记账，用来决定这一趟该先等一等还是该换地址。
+  /// 换歌就重新起算；同一首绕回来（重连、重取）接着上一趟的数走。
+  String? _stallKey;
+  int _stallEpisodes = 0;
+
+  /// 半路停住不放的一种：没有异常、没有 idle、进度不再往前 —— 几条自救的路按
   /// 轻到重走一遍，全走完还不行就报错并往前走，不能让她在无声里干等。
+  ///
+  /// 先后次序在后台很值钱：省电策略掐掉后台网络几秒是常事，同一地址本来就会回来，
+  /// 先等一等代价只是几秒静音；而「重取一条地址」会把换源记住的那个版本一起忘掉、
+  /// 预取那份整首也删掉重下 —— 拿它当第一反应，网络正好还断着，换来的是白跑一趟
+  /// 整条链子，然后就是那句「跳到下一首」。所以头两趟只等，第三趟才换地址。
   void _recoverIfStarved(Duration pos) {
     final song = current;
     if (song == null) return;
+    final key = LibraryStore.keyOf(song);
+    if (_stallKey != key) {
+      _stallKey = key;
+      _stallEpisodes = 0;
+    }
+    _stallEpisodes++;
     final rounds = pos > Duration.zero ? _progress.starveRounds : _progress.coldStartRounds;
-    AppLog.add('播', '「${_t(song)}」在 ${_mm(pos)} 停了 ${rounds * _watchTick.inSeconds} 秒没动静（没报错也没说停）');
+    AppLog.add('播',
+        '「${_t(song)}」第 $_stallEpisodes 趟在 ${_mm(pos)} 停了 ${rounds * _watchTick.inSeconds} 秒没动静（${_witness()}）');
     // 停在哪儿就从哪儿接着要：扔掉这一条地址重取一条，比从头放整首像话。
     if (pos > Duration.zero) {
       _resumeAt = pos;
-      _resumeKey = LibraryStore.keyOf(song);
+      _resumeKey = key;
     }
     if (_fallBackFromLocal(song, at: pos)) return;
+    // 先等一等只对现取的地址成立：读盘读出来的停，等四轮等的还是同一份文件。
+    if (_origin == PlayOrigin.online && _stallEpisodes < 3 && _retryOnStreamDrop(_generation)) return;
     if (_retryWithFreshSource(song)) return;
-    // 走到这儿只剩「等一等再放同一首」这条路：可能真只是网络打了个盹。不走「网络
-    // 断了」那句归因，是因为预取那份半截文件也会停在这儿，那句对她没准是错的。
+    // 换过一条地址还是停在这儿：最后再等一等。不走「网络断了」那句归因，是因为
+    // 预取那份半截文件也会停在这儿，那句对她没准是错的。
     if (_retryOnStreamDrop(_generation)) return;
     failedSong = song;
     // 这句要配得上那颗「重试」：停在半路就把这个点交给 retryFailed，认输之后
@@ -602,16 +639,19 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     if (busy) return;
     final song = current;
     if (song == null || _ap.processingState == ProcessingState.idle) return;
-    final pos = _heardPos();
+    final pos = _heard.value;
     // 本机那份先处理：文件报错跟网络没关系，等多少轮都是同一份文件。停在半路的话
     // 位置照记，现取那条接着放。
     if (_fallBackFromLocal(song, at: pos)) return;
-    if (pos >= _resumeFloor && !_fromLocalDownload) {
+    if (pos >= _resumeFloor && _origin != PlayOrigin.local) {
       _resumeAt = pos;
       _resumeKey = LibraryStore.keyOf(song);
-      AppLog.add('播', '「${_t(song)}」在第 ${_mm(pos)} 断流，记住位置等重连');
+      AppLog.add('播', '「${_t(song)}」在第 ${_mm(pos)} 断流，记住位置等重连（${_witness()}）');
       _urlStaler?.call(song, AppSettings.instance.quality);
-      AudioPrefetch.instance.drop(song);
+      // 预取那份整首不能顺手就扔：它正是后台被省电策略掐掉网络时唯一的保险 ——
+      // 下一趟 [_sourceFor] 直接读盘，一个字都不用再问网络，听着就是「没断过」。
+      // 只有正在放的确实是这份文件，才轮到「它可能本来就是半截的」这个怀疑。
+      if (_origin == PlayOrigin.prefetched) AudioPrefetch.instance.drop(song);
       if (_retryOnStreamDrop(_generation)) return;
       // 四轮重连都没把这条流接回来：这一条地址（或它背后那个平台）多半就是不行，
       // 换一条再放一次才是对症的那一步。换一条还是打不开，才落到下面认输。
@@ -644,7 +684,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// 在她听来是两回事（前者是「那条不行」，后者是「还没问到」）。
   bool _retryWithFreshSource(Song song, {bool gotUrl = true}) {
     // 手上这份是她下载的文件：换一条地址不叫重取，那一步归 [_fallBackFromLocal]。
-    if (_fromLocalDownload) return false;
+    if (_origin == PlayOrigin.local) return false;
     LibraryStore.instance.forgetSwapSong(song);
     _urlStaler?.call(song, AppSettings.instance.quality);
     AudioPrefetch.instance.drop(song);
@@ -674,7 +714,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     // 两个判据都要看：正在放这份文件时，清单那份 30 秒的存活缓存可能刚好说它不在；
     // 清单说在却没在放它，那就是下面这一条已经绕开过一次了，按 key 挡住即可。
     // 预取那一份出的错不归这儿 —— [_retryWithFreshSource] 里的 drop 把它删了重下。
-    if (!_fromLocalDownload && !LibraryStore.instance.hasLocalFile(song)) return false;
+    if (_origin != PlayOrigin.local && !LibraryStore.instance.hasLocalFile(song)) return false;
     if (_localBusted.contains(key)) return false;
     _localBusted.add(key);
     // 听到哪儿就从哪儿接着要：文件读到一半卡住，换网络那条地址也该从同一秒续上，
@@ -764,7 +804,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     // 切走的这一刻先给上一首记一笔账：她听到第几秒就走了，是口味最直接的信号，
     // 而全App只有这里知道那一刻。自然播完的那首已经在 [_onTrackEnd] 记过，跳过。
     final out = current;
-    final outHeard = _lastHeard;
+    final outHeard = _heard.value;
     final gen = ++_generation;
     index = i;
     busy = true;
@@ -801,7 +841,16 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     // 判死是不对的；可绕回同一首（重连、换一条地址再放）也不该把额度重新填满，
     // 不然那一首永远试不完、队列永远不往前走。
     _netRetryBudget.startSong(songKey);
-    _lastHeard = Duration.zero;
+    // 这一首的「听到哪儿」从它的起点算起，而不是从零：续播那一趟第一个报上来的就是
+    // 2:13，从 0 起算它是一步跨了两分多钟，会被当成脏值挡在门外 —— 然后往后每一跳
+    // 都进不来，这首歌在表里永远停在 0:00。
+    _heard.start(resume ?? Duration.zero);
+    // 「在这首歌上停过几趟」是按首记的账：绕回同一首（重连、换一条地址再放）接着数，
+    // 数到第三趟才升级到重取地址；换了一首歌才重新起算。
+    if (out == null || LibraryStore.keyOf(out) != songKey) {
+      _stallKey = null;
+      _stallEpisodes = 0;
+    }
     // 换了一首就是新的一分钟：上一首拖到的那个目标不该再压着这一首的进度头。
     _seekHold = null;
     // 重新开播就是「她自己接回来了」：那句「中途停了」和它那颗键该一起收走，
@@ -815,7 +864,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       final source = await _sourceFor(song).timeout(const Duration(seconds: 30));
       if (gen != _generation) return;
       gotUrl = true;
-      // 取到链接不等于放得出来：音源脚本卡住或平台层不回应时，没有超时就永远
+      // 取到链接不等于放得出来：平台层不回应或那条地址背后已经没了时，没有超时就永远
       // 停在「加载中」，自动跳下一首也永远不会触发。
       // 续播那一趟要慢得多：Exo 得先把缓冲推到第几分钟才回话，用从零起播那 15 秒
       // 去卡它，恰好会在最不该失败的地方失败。
@@ -971,7 +1020,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       final scope = whole ? '队列里的歌' : '连着 $_skipStreakCap 首歌';
       error = _lastFailVip
           ? '$scope都撞在会员墙上，暂时没有能播的版本；可在列表页「整单找免费版」再试'
-          : '$scope都放不出来，多半是网络；跑一次「音源自检」能看出是哪个曲库不通';
+          : '$scope都放不出来，多半是网络；跑一次「曲库自检」能看出是哪个曲库不通';
       AppLog.add('跳', '$scope都放不出，停在这里：$error');
       // 不递增 errorTick 的话，main.dart 只认 tick 变化，这句话永远不会弹出来。
       errorTick++;
@@ -986,18 +1035,18 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Prefer a file this app already downloaded, so the song plays even with no
-  /// network and no音源 round-trip. 其次是预取下来的下一首：整首已在磁盘上，
+  /// network and no URL round-trip. 其次是预取下来的下一首：整首已在磁盘上，
   /// 切过去和放本地文件一样快，不用再等一次建连缓冲。
   Future<AudioSource> _sourceFor(Song song) async {
     // 先按「不是本机那份」写着：走到下面哪一条分支算哪一条，取链那一步抛了也不会
     // 留下上一首的旧答案。
-    _fromLocalDownload = false;
+    _origin = PlayOrigin.online;
     // 播放卡的封面必须先落到本地（理由见 artFileFor）。这一发和下面找音轨并行
     // 发起，打 tag 时多半已经回来，不给起播加时间。
     final art = artFileFor(artUrl(song.pic, px: 300));
     final local = LibraryStore.instance.localFile(song);
     if (local != null && !_localBusted.contains(LibraryStore.keyOf(song))) {
-      _fromLocalDownload = true;
+      _origin = PlayOrigin.local;
       _how = '本机下载的文件';
       return AudioSource.file(local, tag: await _mediaItem(song, art));
     }
@@ -1009,6 +1058,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     final servedBy = LibraryStore.instance.swapSongFor(song)?.source;
     final pre = await AudioPrefetch.instance.path(song, quality, servedBy: servedBy);
     if (pre != null) {
+      _origin = PlayOrigin.prefetched;
       _how = '提前备好的 ${heardQuality(quality, servedBy ?? song.source)}';
       return AudioSource.file(pre, tag: await _mediaItem(song, art));
     }
@@ -1091,7 +1141,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     // 听完比「点开过」强得多：整首都记上。位置取总时长，在线流的 duration
     // 有时不报，退回曲库里现成的那个 interval。
     _endNoted = LibraryStore.keyOf(cur);
-    _noteHeard(cur, heard: total ?? _lastHeard, completed: true);
+    _noteHeard(cur, heard: total ?? _heard.value, completed: true);
     // 「播完这首就停」排在循环模式之前：这是她此刻最明确的一句意愿，
     // 循环那种长期设定不该盖过来。
     if (_stopAfterCurrent) {
@@ -1104,18 +1154,19 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     }
     switch (playMode) {
       case PlayMode.single:
-        // 判据是「这一趟真是从那份文件开出来的」，不是「这首歌下载过」：本机那份
+        // 判据是「这一趟读的是磁盘上的文件」，不是「这首歌下载过」：本机那份
         // 被绕开、正用现取地址放的时候，seek 回零等于拿一条快过期的地址再循环一遍。
-        if (_fromLocalDownload) {
+        // 预取那份同样不会过期，循环它不用重新取链。
+        if (_origin != PlayOrigin.online) {
           unawaited(_ap.seek(Duration.zero));
           unawaited(_ap.play());
           // 这一趟是重新开始听，不是上一趟的尾巴：留着「已经记过听完」这个标记，
           // 她从第二轮里跳走时那一半的收听位置就再也记不进口味了。
           _endNoted = null;
           // 更要紧的是把「听到哪」和那只盯进度的表一起清零：本地重开不走 [playAt]，
-          // 而 _lastHeard 现在只往上走（防的就是内核在播完那一下把位置清回零），
-          // 留着的 3:58 会让兜底表一直以为这首歌贴在末尾，六秒一次把循环推成乱跳。
-          _lastHeard = Duration.zero;
+          // 而那只表只往上走（防的就是内核在播完那一下把位置清回零），留着的 3:58
+          // 会让兜底表一直以为这首歌贴在末尾，六秒一次把循环推成乱跳。
+          _heard.start(Duration.zero);
           _lastTickPos = Duration.zero;
           _progress.reset();
         } else {
@@ -1422,7 +1473,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> seek(Duration d) async {
     // 拖进度条也是「她听到的位置」：不回写这里，往回拖之后万一断流，重连会把人送
     // 回拖动之前的那一秒，听起来就像歌自己乱跳了一段。
-    _lastHeard = d;
+    _heard.start(d);
     // 进度表也要跟着挪到新点：它记的是「从哪一刻起没再往前走」，拿拖动之前的
     // 老位置当基准，往回拖的那一首会被一路数成「停住」，三十秒后凭空掐掉。
     _progress.reset();
@@ -1544,7 +1595,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _resumeKey = null;
     _failedResumeAt = null;
     _failedResumeKey = null;
-    _lastHeard = Duration.zero;
+    _heard.start(Duration.zero);
     _lastTickPos = Duration.zero;
     _progress.reset();
     _seekHold = null;
@@ -1822,7 +1873,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// 重启后第一次真正接上音源时，把存下来的预设补回去。
+  /// 重启后第一次真正接上播放器时，把存下来的预设补回去。
   /// 只在第一首做一次：之后都是同一个播放器实例，效果器一直挂着。
   Future<void> _restoreEq() async {
     if (_eqRestored) return;

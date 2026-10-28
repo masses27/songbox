@@ -1,7 +1,7 @@
 // 这份文件是 just_audio_background 0.0.1-beta.17 的副本（MIT，见同目录 LICENSE），
 // 只为了改一件事：卡上「上一首/下一首」的落点。上游把这两个键接在自己的
 // skipToQueueItem 上，而本项目是一首一首装 AudioSource（放不出时才能逐首降音质、
-// 换音源、换平台），hasNext/hasPrevious 永远是 false ⇒ 那两个键既不在控件表里，
+// 换源、换平台），hasNext/hasPrevious 永远是 false ⇒ 那两个键既不在控件表里，
 // 按下去也是静默 return。改动集中在三处，都和 skip 无关的代码保持上游原样：
 //   1. JustAudioBackground 上多两个静态钩子 onSkipToPrevious/onSkipToNext；
 //   2. _PlayerAudioHandler.skipToPrevious/skipToNext 先走钩子，没赋值时行为不变；

@@ -1,9 +1,7 @@
-import '../engine/lx_engine.dart';
 import '../models/song.dart';
 import '../settings/app_settings.dart';
 import 'bl_source.dart';
 import 'kg_native.dart';
-import 'kw_search.dart';
 import 'tx_native.dart';
 import 'tx_search.dart';
 import 'wy_native.dart';
@@ -11,15 +9,16 @@ import 'wy_search.dart';
 
 /// 一条自检结论。ok 决定绿勾还是感叹号，message 给人看，raw 留着服务器原话。
 ///
-/// `warn` 是「这一行不通，但它本来就用不上」：音源脚本只覆盖酷我、对照曲本身在酷狗
-/// 也是付费的，都属于这类。跟「坏了」共用一个红色图标，她就会去修一个不需要修的东西。
+/// `warn` 是「这一行不通，但它本来就用不上」：对照曲本身在酷狗也是付费的、
+/// 搜索通了可直链就是不给这一首，都属于这类。跟「坏了」共用一个红色图标，
+/// 她就会去修一个不需要修的东西。
 typedef ProbeResult = ({String label, bool ok, bool warn, String message, String raw});
 
-/// 手机端音源自检：网易云、QQ、音源脚本、B 站、酷狗各问一次。
+/// 手机端曲库自检：网易云、QQ、B 站、酷狗各问一次。
 ///
 /// 每台网络出去看到的墙不一样——酷狗的行为验证按 IP 和频率弹（那条老通道现在不参与播放，
-/// 只留个测量值），音源脚本的接口也有地区限流。电脑上测出来的结论搬不过去，
-/// 所以这一页把每个源的原始回执摊在手机上，跑一次十几秒。
+/// 只留个测量值）。电脑上测出来的结论搬不过去，所以这一页把每个源的原始回执摊在手机上，
+/// 跑一次十几秒。
 class SourceProbe {
   /// 各曲库都有这首歌，拿它当正向对照。
   static const keyword = '晴天';
@@ -122,60 +121,6 @@ class SourceProbe {
       return (songs: await TxSearch.toplistSongs(), via: '榜单');
     } catch (e) {
       throw Exception('腾讯搜索和榜单都没给歌：${_short(searchError)}；${_short(e)}');
-    }
-  }
-
-  /// 音源脚本那一层：网易云、QQ、B 站、酷狗现在都走端内直连，脚本只是给酷我这类
-  /// 别的入口覆盖不到的曲库兜底。
-  ///
-  /// 关键是把「不通」和「用不上」分开说：市面上的脚本九成只覆盖 kw，而 kw 的取链
-  /// 接口已经下线（只剩 11 秒试听），这种失败换网络、换脚本都不会变好。要是这一行
-  /// 跟「放不出」共用一个红色图标，她就会去修一个本来不需要修的东西。
-  static Future<ProbeResult> lxSource() async {
-    final engine = LxEngine.active;
-    final support = engine?.support;
-    final sources = support?.sources.join(' / ') ?? '未上报';
-    // 只有脚本自己上报了覆盖、且覆盖里除了酷我什么都没有时，才敢说这一层用不上。
-    // 没上报（support 为 null 或列表为空）是另一回事：那是不知道，不是没用。
-    final covered = support?.sources ?? const <String>[];
-    final inert = covered.isNotEmpty && covered.every((s) => s == 'kw');
-    if (engine == null || !engine.inited) {
-      return _bad(
-        '音源脚本',
-        '没启用。只听网易云、QQ、B 站、酷狗用不上这一层，不用管',
-        engine?.initError ?? '未启用',
-        warn: true,
-      );
-    }
-    try {
-      final found = await KwSearch().search(keyword, limit: 5);
-      if (found.list.isEmpty) {
-        return _bad('音源脚本', '酷我搜索没有结果', '覆盖：$sources', warn: inert);
-      }
-      final pick = found.list.first;
-      final result = await engine.sendRequest('kw', 'musicUrl', pick.toMusicInfo(),
-          timeout: const Duration(seconds: 15));
-      final data = result['data'];
-      final url = data is Map ? data['url'] : data;
-      if (url is String && url.isNotEmpty) {
-        return (
-          label: '音源脚本',
-          ok: true, warn: false,
-          message: '「${pick.name}」酷我取链成功，脚本覆盖 $sources 个平台',
-          raw: _tail(url),
-        );
-      }
-      return _bad('音源脚本', '脚本回了话，但没给地址', _tail('${data ?? result}'), warn: inert);
-    } catch (e) {
-      return _bad(
-        '音源脚本',
-        inert
-            ? '这个脚本只覆盖酷我，而酷我那条取链接口已经废了 —— '
-                '现在听歌走的是端内直连和 B 站、酷狗，这一行不用管'
-            : '脚本取链失败（覆盖：$sources）：${_short(e)}',
-        '$e',
-        warn: inert,
-      );
     }
   }
 

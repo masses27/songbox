@@ -2,13 +2,13 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
-/// 所有要落到磁盘上的东西（设置、歌单、音源脚本、日志、封面、预取、下载）都从这里拿根目录。
+/// 所有要落到磁盘上的东西（设置、歌单、日志、封面、预取、下载）都从这里拿根目录。
 ///
 /// 收口之前是七个文件各自调 path_provider，桌面版露出两个毛病：
 ///
 /// 1. Windows 上 `getApplicationDocumentsDirectory()` 返回的就是用户的「文档」根目录
 ///    （`path_provider_windows` 直接给 `WindowsKnownFolder.Documents`，不像支持目录那样
-///    带 `Company\Product` 后缀）。设置、歌单、日志、音源就这么撒进她的文档里，想拷走
+///    带 `Company\Product` 后缀）。设置、歌单、日志就这么撒进她的文档里，想拷走
 ///    还不知道该带哪几个文件夹。
 /// 2. `getExternalStorageDirectory()` 在 Windows 上根本不实现，是**抛** `UnimplementedError`
 ///    而不是返回 null —— 所以封面、预取、下载那三处 `ext ?? docs` 的兜底在桌面上压根走不到，

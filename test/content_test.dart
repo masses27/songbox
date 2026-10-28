@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lyric_music/library/taste_profile.dart';
 import 'package:lyric_music/models/results.dart';
 import 'package:lyric_music/models/song.dart';
+import 'package:lyric_music/music_sdk/tx_leaderboard.dart';
 import 'package:lyric_music/music_sdk/wy_catalog.dart';
 import 'package:lyric_music/music_sdk/wy_search.dart';
 import 'package:lyric_music/ui/rank_groups.dart';
@@ -44,9 +45,81 @@ void main() {
       expect(groupRanks(const []), isEmpty);
     });
 
+    test('接口自己分了组的照它的分，不再按榜名猜', () {
+      // QQ 那张总表自带四组（巅峰榜/地区榜/特色榜/全球榜）。上面那套关键词是按网易云的
+      // 榜名写的，拿去切 QQ 的榜会把「韩国榜」抬进海外榜、把「飙升榜」之外的主榜打散。
+      final tx = [
+        RankInfo('tx', '62', '飙升榜', group: '巅峰榜'),
+        RankInfo('tx', '26', '热歌榜', group: '巅峰榜'),
+        RankInfo('tx', '16', '韩国榜', group: '地区榜'),
+        RankInfo('tx', '108', '美国公告牌榜', group: '全球榜'),
+      ];
+      final g = groupRanks(tx);
+      expect(g.map((e) => e.title), ['巅峰榜', '地区榜', '全球榜'], reason: '组名和顺序都按接口给的走');
+      expect(g[0].ranks.map((e) => e.name), ['飙升榜', '热歌榜']);
+    });
+
+    test('一部分榜带组名时，两组都保留', () {
+      // 混着来只可能是接口改了一半：这时候按名字猜那批照常归组，别让它们挤进同一个组。
+      final g = groupRanks([
+        RankInfo('wy', '1', '飙升榜'),
+        RankInfo('tx', '62', '热歌榜', group: '巅峰榜'),
+      ]);
+      expect(g.map((e) => e.title), ['巅峰榜', '官方主榜']);
+    });
+
     test('首页榜单只取官方主榜', () {
       expect(homeRanks(ranks), hasLength(4));
       expect(homeRanks([_r('某个新榜'), _r('另一个榜')]).map((e) => e.name), ['某个新榜', '另一个榜']);
+    });
+  });
+
+  group('QQ 榜单总表', () {
+    // 2026-10-29 实测那张表给四组、共 30 张榜；这里照它的形状造一份，
+    // 认字段这种错误只有钉在这里才不会等装机后才被发现。
+    final board = {
+      'group': [
+        {
+          'groupName': '巅峰榜',
+          'toplist': [
+            {'topId': 62, 'title': '飙升榜', 'totalNum': 100, 'frontPicUrl': 'http://y.gtimg.cn/a.jpg'},
+            {'topId': 26, 'title': '热歌榜', 'totalNum': 300},
+            // 这张 App 里点开了只会是一场空等：它没有视频。
+            {'topId': 201, 'title': 'MV榜', 'totalNum': 20},
+            {'topId': 0, 'title': ''},
+          ],
+        },
+        {
+          'groupName': '地区榜',
+          'toplist': [
+            {'topId': 3, 'title': '欧美榜', 'totalNum': 100, 'frontPicUrl': 'https://y.gtimg.cn/b.jpg'},
+          ],
+        },
+      ],
+    };
+    final list = TxLeaderboard.parseBoards(board);
+
+    test('剔掉没有音频的榜和空条目，组名照接口给的那份', () {
+      expect(list.map((e) => e.name), ['飙升榜', '热歌榜', '欧美榜']);
+      expect(list.map((e) => e.group), ['巅峰榜', '巅峰榜', '地区榜']);
+      expect(list.map((e) => e.source).toSet(), {'tx'});
+    });
+
+    test('卡片上那一行写的是接口自己的曲数', () {
+      expect(list[0].desc, '100 首');
+      expect(list[1].desc, '300 首');
+    });
+
+    test('封面统一升级成 https，本来就是 https 的原样通过', () {
+      expect(list[0].img, 'https://y.gtimg.cn/a.jpg');
+      expect(list[2].img, 'https://y.gtimg.cn/b.jpg');
+      expect(list[1].img, isNull, reason: '接口没给图就别编一个地址出来');
+      expect(TxLeaderboard.httpsCover('  '), isNull);
+    });
+
+    test('接口回了空表也不炸，由调用方报「没给榜」', () {
+      expect(TxLeaderboard.parseBoards(null), isEmpty);
+      expect(TxLeaderboard.parseBoards({'group': []}), isEmpty);
     });
   });
 
@@ -283,8 +356,10 @@ void main() {
   });
 
   group('歌单分类词表', () {
-    // 分类树接口匿名全 404，词表只能带在端内；带进来的每一个词都要真的能问出歌单，
-    // 否则点中那一格就是给她看一块「没拉到」。
+    // 词表抄的是官方分类树 `/api/playlist/catalogue` 那 70 个词，但树上写着不等于分类页
+    // 有货：未知分类网易云不报错，直接回一张兜底歌单（首条恒为 6671216522），点中一个死词
+    // 看到的是「拉到了十几张歌单」，内容跟这个分类毫无关系。带进来的每一个词都得自己打一次
+    // `/api/playlist/list` 验过。
     test('横向那一排用到的分类都在分组词表里', () {
       final grouped = WyCatalog.categoryGroups.expand((g) => g.names).toSet();
       for (final c in WyCatalog.quickCategories) {
@@ -294,6 +369,23 @@ void main() {
       expect(WyCatalog.quickCategories.first, '推荐');
     });
 
+    test('那 20 个实测只回兜底歌单的词，一个都不许回来', () {
+      // 2026-10-29 三批带间隔的复核（每次隔 700ms、先立两个瞎写的词当对照）判死的：
+      // 它们和两个假词回的是同一张歌单。写成一张黑名单钉在这里，是因为这些词看着都「像
+      // 分类」——下次有人照着别的 App 抄词表，很容易顺手把它们再塞回去。
+      const dead = [
+        '小语种', '法语', '德语', '意大利语', '西班牙语', '俄语', '泰语', //
+        'R&B', '唱作', '睡眠', '开车', '深夜', '聚会', '动漫', //
+        '男声', '女声', '纯音乐', '儿歌', '网络热歌', '励志',
+      ];
+      final names = WyCatalog.categoryGroups.expand((g) => g.names).toList();
+      for (final w in dead) {
+        expect(names, isNot(contains(w)), reason: '$w 是验过的死词');
+      }
+      // 死词的正版写法得在：R&B → R&B/Soul、开车 → 驾车、动漫 → ACG、网络热歌 → 网络歌曲。
+      expect(names, containsAll(<String>['R&B/Soul', '驾车', 'ACG', '网络歌曲', '经典']));
+    });
+
     test('一个词不在两组里出现两次', () {
       final all = WyCatalog.categoryGroups.expand((g) => g.names).toList();
       expect(all.toSet(), hasLength(all.length), reason: '同一个分类挂两组，面板上就有两颗一样的胶囊');
@@ -301,6 +393,7 @@ void main() {
         expect(g.names, isNotEmpty, reason: '${g.title} 这一组是空的，摊开只会是一行标题');
         expect(g.title, isNot(contains('推荐')));
       }
+      expect(all, hasLength(70), reason: '官方树给的就是 70 个词，少了就是又删掉了一组');
     });
 
     test('「推荐」不混进分类词表', () {

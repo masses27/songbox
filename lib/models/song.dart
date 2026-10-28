@@ -137,28 +137,6 @@ class Song {
         'types': _types.map((k, v) => MapEntry(k, v.toJson())),
       };
 
-  /// The `musicInfo` object the lx-music protocol hands to user scripts for
-  /// the `musicUrl` action. Scripts read different id fields per source
-  /// (`hash ?? songmid`, `songmid || id || mid`), so we mirror the single
-  /// identifier we captured across all of them. For kw that identifier is the
-  /// numeric rid, which lx-music-mobile also treats as the hash.
-  Map<String, dynamic> toMusicInfo() => {
-        'name': name,
-        'singer': singer,
-        'text': '$name $singer'.trim(),
-        'albumName': albumName,
-        'albumId': albumId,
-        'id': id ?? songmid,
-        'songmid': songmid,
-        'hash': songmid,
-        'mid': songmid,
-        'sid': songmid,
-        'interval': interval,
-        'duration': interval,
-        'source': source,
-        'types': _types.map((k, v) => MapEntry(k, v.size ?? '')),
-      };
-
   String get qualityLabels => _types.keys.join(',');
 
   static List<Song> listFromJson(dynamic arr) =>
@@ -185,7 +163,7 @@ String heardQuality(String wanted, String source) {
 }
 
 /// 档位码给人看的名字。以前只有设置页有一张对照表，别处（播放页那行「现在听到的是
-/// 哪一档」、下载确认、音源自检）就直接把「flac」念出来——她看见的是代码不是档位。
+/// 哪一档」、下载确认、曲库自检）就直接把「flac」念出来——她看见的是代码不是档位。
 /// 未知代码原样带出来：B 站那档是 192k，写成「高清 320k」就是骗人。
 String qualityLabel(String q) => switch (q) {
       '128k' => '标准 128k',

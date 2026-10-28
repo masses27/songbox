@@ -12,7 +12,6 @@ import '../util/art_url.dart';
 import '../util/humanize.dart';
 import 'pages/builtin_library.dart';
 import 'pages/search_page.dart';
-import 'pages/sources_page.dart';
 import 'theme.dart';
 
 /// Shared NetEase-Cloud-Music-style building blocks.
@@ -198,6 +197,47 @@ class CoverCard extends StatelessWidget {
                   style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// 一格「封面 + 歌名 + 歌手」的歌卡，横向那一排用的。首页的推荐新歌曲和发现页的
+/// 新歌速递共用这一份：整格都认点击（她眼睛盯着的是字，手指也点在那儿），
+/// 点下去就地播——队列是屏幕上这一批，不是接口给的全部。
+class SongCard extends StatelessWidget {
+  final Song song;
+  final List<Song> batch;
+  final void Function(Song, List<Song>) onTap;
+  final double side;
+  const SongCard(
+      {super.key,
+      required this.song,
+      required this.batch,
+      required this.onTap,
+      this.side = 96});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: side,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onTap(song, batch),
+        onLongPress: () => showSongMenu(context, song, siblings: batch),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CoverTile(label: '', imageUrl: song.pic, size: side),
+            const SizedBox(height: 4),
+            Text(song.name,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+            Text(song.singer,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+          ],
+        ),
       ),
     );
   }
@@ -731,36 +771,22 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
                   }
                   final found = snap.data ?? const <Song>[];
                   if (found.isEmpty) {
-                    // 原来这里只写「到搜索页换个关键词，或在「音源」页启用别的音源」——
-                    // 两个去处都得她自己退出去找。按钮直接放在这一格上。
+                    // 按钮直接放在这一格上，不用她自己退出去找搜索页。
                     return SingleChildScrollView(
                       child: Column(
                       children: [
                         const EmptyState(
                           icon: Icons.music_off_outlined,
-                          message: '没找到同一首歌的其他版本\n可以换个关键词搜搜看，或者看看还有哪个曲库能开',
+                          message: '没找到同一首歌的其他版本\n换个关键词说不定能搜到',
                         ),
                         Padding(
                           padding: const EdgeInsets.only(bottom: 20),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              FilledButton.tonal(
-                                  onPressed: () {
-                                    Navigator.pop(ctx);
-                                    SearchPage.open(context, widget.song.name);
-                                  },
-                                  child: const Text('去搜索')),
-                              const SizedBox(width: 10),
-                              OutlinedButton(
-                                  onPressed: () {
-                                    Navigator.pop(ctx);
-                                    Navigator.push(context,
-                                        MaterialPageRoute(builder: (_) => const SourcesPage()));
-                                  },
-                                  child: const Text('音源页')),
-                            ],
-                          ),
+                          child: FilledButton.tonal(
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                SearchPage.open(context, widget.song.name);
+                              },
+                              child: const Text('去搜索')),
                         ),
                       ],
                       ),

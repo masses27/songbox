@@ -50,7 +50,7 @@ class SettingsPage extends StatelessWidget {
         await DownloadManager.deleteImageCache() + await AudioPrefetch.instance.clearAll();
     if (doMusic == false) {
       if (!context.mounted) return;
-      toast(context, '已清出 ${_fmt(freedCache)}（歌曲收藏与音源设置保留）');
+      toast(context, '已清出 ${_fmt(freedCache)}（收藏与已下载的音乐保留）');
       return;
     }
     // 删完再报数：以「删之前量到的占用」当「清出来的体积」，遇到一首删不掉就是纯骗人。
@@ -180,8 +180,8 @@ class SettingsPage extends StatelessWidget {
           ),
           Divider(height: 24, color: AppTheme.divider),
           ListTile(
-            title: const Text('音源自检'),
-            subtitle: Text('逐个问一遍网易云、QQ、音源脚本、B 站、酷狗，看这个网络上能不能拿到整首；'
+            title: const Text('曲库自检'),
+            subtitle: Text('逐个问一遍网易云、QQ、B 站、酷狗，看这个网络上能不能拿到整首；'
                 '同一首歌换个网络结果可能不一样，跑一次十几秒',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
             trailing: Icon(Icons.chevron_right, color: AppTheme.textSecondary),
@@ -230,8 +230,7 @@ class SettingsPage extends StatelessWidget {
             title: const Text('关于'),
             subtitle: Text('听歌小窝 v${AppSettings.appVersion}\n'
                 '网易云、QQ 的歌在端内直连播放，全程匿名，不需要登录任何账号；'
-                '会员专享的会自动换成 B 站、酷狗同一首的整首；'
-                '「音源管理」只是多接几个曲库的入口，不启用也能听。',
+                '会员专享的会自动换成 B 站、酷狗同一首的整首。',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
           ),
           const SizedBox(height: 24),

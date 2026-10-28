@@ -104,7 +104,7 @@ class _EqPageState extends State<EqPage> {
 
   bool _checkBusy = false;
 
-  /// 「再问一次」：某些定制 ROM 要等第一次真正接上音源之后才给出均衡器通道。
+  /// 「再问一次」：某些定制 ROM 要等第一次真正接上播放器之后才给出均衡器通道。
   Future<void> _recheck() async {
     setState(() => _checkBusy = true);
     await _check();

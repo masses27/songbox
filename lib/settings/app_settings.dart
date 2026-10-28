@@ -19,7 +19,7 @@ class AppSettings extends ChangeNotifier {
 
   /// 和 pubspec.yaml 同步；build.sh 每次打包前按 pubspec 改写这一行，
   /// 「关于」上写错版本号会把她截图里的版本带偏，而排查全靠那句版本。
-  static const appVersion = '0.8.39';
+  static const appVersion = '0.8.41';
 
   String quality = '320k';
   final List<String> searchHistory = [];
@@ -46,7 +46,7 @@ class AppSettings extends ChangeNotifier {
   double playbackSpeed = 1.0;
 
   /// 均衡器预设名，跨启动保持。效果器挂在播放器实例上，重启会丢，
-  /// 所以第一首接上音源后要照这个名字补一次。'关闭' 表示不用均衡器。
+  /// 所以第一首接上播放器后要照这个名字补一次。'关闭' 表示不用均衡器。
   String eqPreset = '关闭';
 
   /// 循环模式，跨启动保持（'list' / 'single' / 'random' / 'none'）。
