@@ -184,10 +184,11 @@ jobs:
           # with the machine ANSI code page.
           $cs = Join-Path $env:RUNNER_TEMP 'launcher.cs'
           $t = Get-Content -Raw -Path 'tool/win_single/launcher.cs'
-          $t2 = $t.Replace('const string Version = "0.8.36";', 'const string Version = "' + $ver + '";')
-          # assert on the result, not on "did the text change": once the default literal
-          # in launcher.cs equals the version being built, Replace is a no-op and a
-          # before/after comparison would fail a perfectly good build
+          # match the Version line itself, not a literal old default: when launcher.cs
+          # already carries the version being built, a literal Replace is a silent no-op
+          # and the next release would ship the previous stamp
+          $t2 = [regex]::Replace($t, 'const string Version = "[0-9.]+";', 'const string Version = "' + $ver + '";')
+          # assert on the result, not on "did the text change"
           if (-not $t2.Contains('const string Version = "' + $ver + '";')) {
             throw "launcher.cs patched for nothing: no Version line for $ver"
           }

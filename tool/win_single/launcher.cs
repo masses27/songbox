@@ -60,7 +60,7 @@ static class Launcher
     // literal before compiling, so the payload and the stamp can never disagree. Public
     // because the assembly attributes above read it; the workflow patches the text after
     // "const string Version", which still matches with the modifier in front.
-    public const string Version = "0.8.36";
+    public const string Version = "0.8.37";
 
     static string _status = "idle";
     static string _logPath = null;
