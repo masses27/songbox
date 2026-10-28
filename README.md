@@ -46,6 +46,14 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 
 打完包核这两眼：`aapt2 dump resources` 里 `drawable/audio_service_*` 该有七枚，`build/app/outputs/mapping/release/mapping.txt` 里 `AudioService`、`AudioService$ServiceListener`、`AudioServicePlugin` 都该映射到自己。
 
+### 会被就地增删的那份表，空的时候不能交 `const []`
+
+`LibraryStore.songsFrom` 原来在文件读不出列表时 `return const []`，而交出去的这一份正是 `_by` 里被就地增删的底账。dart 的 `const []` 是不可变列表，于是新机器（收藏、最近播放、下载三份文件都还没落过盘）第一次 `recordRecent` 的 `removeWhere` 当场抛 `Unsupported operation: Cannot remove from an unmodifiable list` —— 而那一句卡在 `playAt` 的「地址已经装好」和「开口放」之间，换一条地址再来一遍还是同一句，整条队列一路跳过，看着像平台挂了。本机因为留着旧的 `recent.json`，读出来就是可写的，从头到尾没露过；安卓全新装机或清过数据同样中招，跟 Windows 没关系。
+
+同一根因还带着三处：新机器点收藏（insert）、下载完成记账（removeWhere）、撤销「移出」（insert）。四处动的都是同一份 `_by[kind]`，所以改一句 `<Song>[]` 一起好 —— 判据以后照用：会被就地增删的那份底账，初始化必须是可变的；只对外给一份读不动的视图，那是调用口上另套 `List.unmodifiable`（`list()` 就是），不是靠返回值写 `const []`。钉它的是 `test/storage_test.dart` 里「库文件还没落盘时读出来的那一份」那组。
+
+顺手补的取证：`[链] 「…」取不到声音` 那一行后面，如果异常是程序自己的错（`isOwnBug`），会紧跟一行 `[崩] 取证 · …`，带上 `package:lyric_music` 那几帧（最多三帧，一路跳歌只在第一首记）；全局崩溃处理器那两句同样带上。这类错从她那边只会回来一句没法行动的英文，抄一行日志就能定位到行。
+
 ### 桌面图标故意不做自适应图标，但整张必须铺满
 
 `res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png` 五张整幅铺满的方形 PNG（48/72/96/144/192）：圆盘画满整个宽度，四角用画面自己的夜色做一层虚化底补上，一个透明像素都不留。仓库里没有 `mipmap-anydpi-v26/ic_launcher.xml` 是被删掉的，别照安卓文档里的「最佳实践」补回来：
@@ -59,6 +67,8 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 同一套 Dart 代码也能在桌面上跑，产物有形态两份：一个 zip（解压双击 `lyric_music.exe`）和一颗自解压的单文件 exe（下面两节各说一种），都不用装任何东西（VC++ 运行库那三颗 DLL 一并抄进包里）。
 
 构建走 GitHub Actions：仓库的 Actions 页 → `windows-portable` → Run workflow（`.github/workflows/windows-portable.yml`，只有 `workflow_dispatch`，一次出两份产物：`songbox-<version>-windows-x64-portable.zip` 和 `songbox-<version>-windows-x64-single.exe`）。
+
+产物发在对应版本的 Release 上（tag 是 `v<版本号>`，文件名一律 ASCII —— Release 的直链会把中文名削掉）。桌面当前以 v0.8.38 那两颗为准：v0.8.37 的 Release 上原本也挂了这两颗，已撤下，就是上面那个 `const []` 的坑在未落过库文件的机器上每首都放不出，那版只剩 APK；已经装过桌面版的直接覆盖成新 exe。仓库是私有的，`github.com/…/releases/download/…` 那条直链不带登录态会回 `Not Found`，脚本取产物走 API（`GET /repos/masses27/songbox/releases/assets/<id>` 配 `Accept: application/octet-stream`）。上传同理不能用 `api.github.com` 那条路径（404），要用创建 Release 回包里的 `upload_url` —— 它指向 `uploads.github.com`，尾巴上挂着 `{?name,label}` 模板，得自己去掉模板占位、拼上 `?name=<ascii名>` 再 POST。
 
 必须在 Actions 上编，本机编不了：`flutter build windows` 要能建符号链接，而这台机的账号既没有 `SeCreateSymbolicLinkPrivilege`，开发者模式也开不了（要写 `HKLM\...\AppModelUnlock`，得管理员）。runner 上这两条现成。
 
