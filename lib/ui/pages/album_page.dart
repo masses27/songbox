@@ -91,11 +91,20 @@ class _AlbumPageState extends State<AlbumPage> {
                         ExpandableDesc(text: album.desc, padding: const EdgeInsets.fromLTRB(16, 2, 16, 10)),
                       if (_songs.isNotEmpty)
                         Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                          child: ElevatedButton.icon(
-                            onPressed: () => context.read<PlayerService>().playList(_songs, 0),
-                            icon: const Icon(Icons.play_arrow, size: 20),
-                            label: Text('播放全部 ${_songs.length} 首'),
+                          padding: const EdgeInsets.fromLTRB(16, 4, 8, 8),
+                          child: Row(
+                            children: [
+                              ElevatedButton.icon(
+                                onPressed: () => context.read<PlayerService>().playList(_songs, 0),
+                                icon: const Icon(Icons.play_arrow, size: 20),
+                                label: Text('播放全部 ${_songs.length} 首'),
+                              ),
+                              // 整张专辑一次收下，不用十二首点十二遍。
+                              TextButton(
+                                onPressed: () => collectAllFavorites(context, _songs),
+                                child: const Text('全部收进收藏', style: TextStyle(fontSize: 13)),
+                              ),
+                            ],
                           ),
                         ),
                       for (var i = 0; i < _songs.length; i++)

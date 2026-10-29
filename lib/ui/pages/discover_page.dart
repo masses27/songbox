@@ -250,7 +250,11 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop, Sho
                     // 就地给一颗重试：这句错误光是写在那里，她能做的只有把整页下拉一遍，
                     // 而那一下把分类歌单也一起重取。
                     Expanded(
-                      child: Text('榜单加载失败：$_error',
+                      child: Text(
+                          // 榜还在屏上时说的是「这一批是什么时候的」，不是「失败了」了事。
+                          _ranks.isEmpty ? '榜单加载失败：$_error' : '这些是上次拉的：$_error',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: AppTheme.primary, fontSize: 12)),
                     ),
                     TextButton(
@@ -428,10 +432,9 @@ class _StripState<T> extends State<_Strip<T>> {
       if (mounted && gen == _gen) setState(() => _items = list);
     } catch (e) {
       if (mounted && gen == _gen) {
-        setState(() {
-          _error = humanizeError(e);
-          _items = const [];
-        });
+        // 屏上那批别清：下拉刷新撞上网络抖一下，原来会把她已经在看的一排封面整个
+        // 抹成一句报错。留着旧的，只在下面补一行「这是上次那批」，重试就在旁边。
+        setState(() => _error = humanizeError(e));
       }
     } finally {
       if (mounted && gen == _gen) setState(() => _loading = false);
@@ -510,32 +513,41 @@ class _StripState<T> extends State<_Strip<T>> {
           const Padding(
               padding: EdgeInsets.symmetric(vertical: 26),
               child: Center(child: CircularProgressIndicator()))
-        else if (_error != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Row(
-              children: [
-                // 就地给一颗重试：这句错误光写在那里，她能做的只有把整页下拉一遍，
-                // 而那一下把五块内容一起重取。
-                Expanded(
-                  child: Text('${widget.title}没拉到：$_error',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.primary)),
-                ),
-                TextButton(onPressed: _load, child: const Text('重试', style: TextStyle(fontSize: 13))),
-              ],
+        else ...[
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: Row(
+                children: [
+                  // 就地给一颗重试：这句错误光写在那里，她能做的只有把整页下拉一遍，
+                  // 而那一下把五块内容一起重取。
+                  Expanded(
+                    child: Text(
+                        // 旧批次还在屏上时不能说「没拉到」就算完 —— 那几格是上一次的，
+                        // 得让她知道现在看到的是什么时候的东西。
+                        _items.isEmpty
+                            ? '${widget.title}没拉到：$_error'
+                            : '这批是上次那批：$_error',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12, color: AppTheme.primary)),
+                  ),
+                  TextButton(onPressed: _load, child: const Text('重试', style: TextStyle(fontSize: 13))),
+                ],
+              ),
             ),
-          )
-        else if (_items.isNotEmpty)
-          SizedBox(
-            height: widget.height,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: _items.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 12),
-              itemBuilder: (context, i) => widget.tile(context, _items[i], _items),
+          if (_items.isNotEmpty)
+            SizedBox(
+              height: widget.height,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: _items.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 12),
+                itemBuilder: (context, i) => widget.tile(context, _items[i], _items),
+              ),
             ),
-          ),
+        ],
       ],
     );
   }
@@ -678,10 +690,9 @@ class _SheetCategoriesState extends State<_SheetCategories> {
       if (mounted && gen == _loadGen) setState(() => _sheets = list);
     } catch (e) {
       if (mounted && gen == _loadGen) {
-        setState(() {
-          _error = humanizeError(e);
-          _sheets = const [];
-        });
+        // 同一条毛病：原来下拉刷新撞上一次网络抖，会把她正在看的这十二张卡抹成一句
+        // 报错。留着旧的，只在上面补一行「这是上次那批」。
+        setState(() => _error = humanizeError(e));
       }
     } finally {
       if (mounted && gen == _loadGen) setState(() => _loading = false);
@@ -791,39 +802,48 @@ class _SheetCategoriesState extends State<_SheetCategories> {
         const SizedBox(height: 10),
         if (_loading && _sheets.isEmpty)
           const Padding(padding: EdgeInsets.symmetric(vertical: 32), child: Center(child: CircularProgressIndicator()))
-        else if (_error != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text('歌单没拉到：$_error',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.primary)),
-                ),
-                TextButton(onPressed: _load, child: const Text('重试', style: TextStyle(fontSize: 13))),
-              ],
-            ),
-          )
-        else
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 12,
-              children: [
-                for (final s in _sheets)
-                  GestureDetector(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => SheetDetailPage(sheet: s)),
-                    ),
-                    // 长按即收藏，不用先进详情页再点右上角。
-                    onLongPress: () => toggleSheetFavorite(context, s),
-                    child: CoverCard(sheet: s, width: itemW),
+        else ...[
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    // 上一批还在屏上就不能说「没拉到」：那十二张是上一次的，
+                    // 得让她知道现在看到的是什么时候的东西。
+                    child: Text(
+                        _sheets.isEmpty
+                            ? '歌单没拉到：$_error'
+                            : '这批歌单是上次那批：$_error',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12, color: AppTheme.primary)),
                   ),
-              ],
+                  TextButton(onPressed: _load, child: const Text('重试', style: TextStyle(fontSize: 13))),
+                ],
+              ),
             ),
-          ),
+          if (_sheets.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 12,
+                children: [
+                  for (final s in _sheets)
+                    GestureDetector(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => SheetDetailPage(sheet: s)),
+                      ),
+                      // 长按即收藏，不用先进详情页再点右上角。
+                      onLongPress: () => toggleSheetFavorite(context, s),
+                      child: CoverCard(sheet: s, width: itemW),
+                    ),
+                ],
+              ),
+            ),
+        ],
       ],
     );
   }

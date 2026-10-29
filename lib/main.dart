@@ -186,6 +186,9 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
+    // 上次停在哪儿就从哪儿起：换主题会整棵重建这个壳（页面的颜色是静态取的），
+    // 原来那一趟把 _tab 抹回 0，她傍晚停在发现页就被抬回首页。重启同理。
+    _tab = AppSettings.instance.lastTab.clamp(0, AppSettings.tabCount - 1);
     PlayerService.instance.addListener(_onPlayerChanged);
     // 冷启动哪块存储没读出来，第一帧之后一次性说一声。空列表和「读坏了」在界面上
     // 长得一模一样，不吭声她只会以为这版把收藏弄丢了。
@@ -286,8 +289,14 @@ class _MainShellState extends State<MainShell> {
   /// 而发现页现在把除官方主榜以外的分组收起来了：只切 tab 的话她看到的还是四张榜，
   /// 所以顺手把那一块摊开、滚过去。
   void _openTab(int i) {
-    setState(() => _tab = i);
+    _goTab(i);
     if (i == 1) (_discoverKey.currentState as ShowAllRanks?)?.showAllRanks();
+  }
+
+  /// 换格子只有这一个出口：状态和「上次停在哪儿」得一起改，漏一处下次重建就回到旧的那格。
+  void _goTab(int i) {
+    setState(() => _tab = i);
+    AppSettings.instance.setLastTab(i);
   }
 
   @override
@@ -308,7 +317,7 @@ class _MainShellState extends State<MainShell> {
           BottomNavigationBar(
             currentIndex: _tab,
             // 已经在这个 tab 上再点一次：回到顶部，网易云也是这样。
-            onTap: (i) => i == _tab ? _scrollCurrentTabToTop() : setState(() => _tab = i),
+            onTap: (i) => i == _tab ? _scrollCurrentTabToTop() : _goTab(i),
             items: const [
               BottomNavigationBarItem(icon: Icon(Icons.home_outlined), activeIcon: Icon(Icons.home), label: '首页'),
               BottomNavigationBarItem(icon: Icon(Icons.explore_outlined), activeIcon: Icon(Icons.explore), label: '发现'),

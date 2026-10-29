@@ -39,11 +39,75 @@ String _fmtLeft(Duration d) {
 /// 直接读实例就等于在她盯着看的时候慢半拍。
 String _nowTag(PlayerService player, Song song, {required bool local, Song? swap}) {
   if (player.busy) return '加载中…';
+  // 缓冲单独说一句：这一行原来只有「加载中」和「320k · 网易云」两种，中途停在缓冲里
+  // 照样写着在放，看上去就是歌死了。
+  if (player.isBuffering) return '缓冲中…';
   // 档位按真正出声的那条来源算：换到 B 站的歌还写设置里的无损，就是骗人。
   final tier = qualityLabel(heardQuality(AppSettings.instance.quality, swap?.source ?? song.source));
   if (local) return '$tier · 本地文件';
   if (swap != null) return '$tier · ${song.twinBlocked ? '免费版' : sourceLabel(swap.source)}';
   return '$tier · ${sourceLabel(song.source)}';
+}
+
+/// 这一首在下载管理器里的那条任务；没排队就是 null。
+///
+/// 原来这里用 `firstWhere(orElse: () => DownloadTask(...))` 造一个占位对象，而
+/// `DownloadTask.running` 默认是 true——于是「没在下载」的歌读出来全是「在下载」：
+/// 图标停在下载中、按钮按不动，那正是她点下载没反应的那一下。
+DownloadTask? _taskOf(DownloadManager dm, Song song) {
+  final id = '${song.source}:${song.songmid}';
+  for (final t in dm.tasks) {
+    if (t.id == id && t.running && !t.done) return t;
+  }
+  return null;
+}
+
+/// 下载进度跟在音质那半句后面。字节数只在下载页那张表里有，正在放的这一页看不到，
+/// 而她按下下载之后眼睛是留在这页上的。
+String _downloadNote(DownloadManager dm, Song song) {
+  final t = _taskOf(dm, song);
+  if (t == null) return '';
+  final p = t.progress;
+  return p == null ? ' · 下载中' : ' · 下载中 ${(p * 100).clamp(0, 100).round()}%';
+}
+
+/// 定时剩余那一格自己一秒走一格。
+///
+/// 全局通知是 20 秒一跳的（不为一个数字把整页每秒重绘一次），跟着那个节奏走就是
+/// 数字每二十秒才动一下——她盯着这格看时会以为定时根本没生效。
+class _SleepLeft extends StatefulWidget {
+  final PlayerService player;
+  const _SleepLeft({required this.player});
+
+  @override
+  State<_SleepLeft> createState() => _SleepLeftState();
+}
+
+class _SleepLeftState extends State<_SleepLeft> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Text(
+      '定时 ${_fmtLeft(widget.player.sleepRemaining)}',
+      style: const TextStyle(
+          color: AppTheme.primaryLight,
+          fontSize: 11,
+          decoration: TextDecoration.underline,
+          decorationColor: Colors.white24));
 }
 
 class PlayerPage extends StatefulWidget {
@@ -174,17 +238,16 @@ class _PlayerPageState extends State<PlayerPage> with SingleTickerProviderStateM
                     ),
                     Consumer<DownloadManager>(
                       builder: (_, dm, _) {
-                        final id = '${song.source}:${song.songmid}';
-                        final task = dm.tasks.firstWhere((t) => t.id == id,
-                            orElse: () => DownloadTask(id: id, song: song, quality: AppSettings.instance.quality));
-                        final running = task.running && !task.done;
+                        final task = _taskOf(dm, song);
                         return IconButton(
                           tooltip: isLocal
                               ? '已下载到本地'
-                              : (running ? '下载中 ${((task.progress ?? 0) * 100).toInt()}%' : '下载'),
-                          onPressed: isLocal || running ? null : () => requestDownload(context, song),
+                              : (task == null
+                                  ? '下载'
+                                  : '下载中 ${((task.progress ?? 0) * 100).round()}%'),
+                          onPressed: isLocal || task != null ? null : () => requestDownload(context, song),
                           icon: Icon(
-                            isLocal ? Icons.download_done : (running ? Icons.downloading : Icons.download),
+                            isLocal ? Icons.download_done : (task == null ? Icons.download : Icons.downloading),
                             color: Colors.white70,
                             size: 26,
                           ),
@@ -248,17 +311,17 @@ class _PlayerPageState extends State<PlayerPage> with SingleTickerProviderStateM
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () => _moreMenu.currentState?.showButtonMenu(),
-                          child: Text('定时 ${_fmtLeft(player.sleepRemaining)}',
-                              style: const TextStyle(
-                                  color: AppTheme.primaryLight,
-                                  fontSize: 11,
-                                  decoration: TextDecoration.underline,
-                                  decorationColor: Colors.white24)),
+                          child: _SleepLeft(player: player),
                         ),
                         const Text(' · ', style: TextStyle(color: Colors.white38, fontSize: 11)),
                       ],
-                      Text(_nowTag(player, song, local: isLocal, swap: swap),
-                          style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                      Consumer<DownloadManager>(
+                        // 进度得写在屏上：手机上按不出 tooltip，那行「下载中 45%」
+                        // 原来只有下载图标自己知道。
+                        builder: (_, dm, _) => Text(
+                            _nowTag(player, song, local: isLocal, swap: swap) + _downloadNote(dm, song),
+                            style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                      ),
                     ],
                   ),
                 ),
@@ -602,7 +665,7 @@ class _MoreMenu extends StatelessWidget {
   final GlobalKey<PopupMenuButtonState<String>>? menuKey;
   const _MoreMenu({required this.player, this.menuKey});
 
-  static const List<int> _minutes = [15, 30, 45, 60];
+  static const List<int> _minutes = [15, 30, 45, 60, 90, 120];
 
   @override
   Widget build(BuildContext context) {
@@ -626,7 +689,8 @@ class _MoreMenu extends StatelessWidget {
         ..._minutes.map((m) => PopupMenuItem<String>(
               value: 'sleep-$m',
               child: Text(
-                  '${active && m == mins ? '✓ ' : ''}$m 分钟后停止播放',
+                  '${active && m == mins ? '✓ ' : ''}'
+                  '${PlayerService.sleepLengthLabel(Duration(minutes: m))}后停止播放',
                   style: const TextStyle(color: Colors.white70, fontSize: 14)),
             )),
         PopupMenuItem<String>(

@@ -19,7 +19,7 @@ class AppSettings extends ChangeNotifier {
 
   /// 和 pubspec.yaml 同步；build.sh 每次打包前按 pubspec 改写这一行，
   /// 「关于」上写错版本号会把她截图里的版本带偏，而排查全靠那句版本。
-  static const appVersion = '0.8.41';
+  static const appVersion = '0.8.42';
 
   String quality = '320k';
   final List<String> searchHistory = [];
@@ -52,6 +52,11 @@ class AppSettings extends ChangeNotifier {
   /// 循环模式，跨启动保持（'list' / 'single' / 'random' / 'none'）。
   /// 睡前设成单曲循环、第二天重启又变回列表循环，是这一层原来缺的那格。
   String playMode = 'list';
+
+  /// 上次停在下面哪一格（0 首页 / 1 发现 / 2 我的）。
+  /// 换主题时整棵主壳要重建（页面的颜色是静态取的），没有这一格就会被抬回首页；
+  /// 同一格机制顺带把重启后的落点也记住——她睡前停在「我的」，起来不该从首页重新找。
+  int lastTab = 0;
 
   /// QQ 音乐的设备号：第一次取链时生成，之后一直用这一个。
   /// 所有客户端都报同一个号，正是风控最爱归并的特征。
@@ -105,7 +110,12 @@ class AppSettings extends ChangeNotifier {
     // 循环模式：'list' / 'single' / 'random' / 'none'。写成字符串是为了这个文件
     // 不依赖 material，取值对不对由播放那边按名字认，认不出就回到列表循环。
     if (j['playMode'] is String) playMode = j['playMode'] as String;
+    final lt = j['lastTab'] as num?;
+    if (lt != null && lt >= 0 && lt < tabCount) lastTab = lt.toInt();
   }
+
+  /// 底部那几格的个数。存的时候按它取范围，界面以后加一格也不用改这一层。
+  static const int tabCount = 3;
 
   void setQuality(String q) {
     if (!qualities.contains(q) || q == quality) return;
@@ -158,6 +168,12 @@ class AppSettings extends ChangeNotifier {
   void setPlayMode(String v) {
     if (v == playMode) return;
     playMode = v;
+    _save();
+  }
+
+  void setLastTab(int i) {
+    if (i < 0 || i >= tabCount || i == lastTab) return;
+    lastTab = i;
     _save();
   }
 
@@ -240,6 +256,7 @@ class AppSettings extends ChangeNotifier {
       'playbackSpeed': playbackSpeed,
       'eqPreset': eqPreset,
       'playMode': playMode,
+      'lastTab': lastTab,
       'txGuid': txGuid,
     });
     // 每次改设置都是整份重写，所以这里不用自己排重试：下一次改动就是把这一次

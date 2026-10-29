@@ -243,9 +243,19 @@ class LibraryStore extends ChangeNotifier {
   /// 这样切后台时 [flushNow] 只在真的有过改动才去写盘。
   bool _pathsDirty = false;
 
+  /// 没写成的那一批过 20 秒再试一班（收藏、听歌计数、换源记录早就有这一手，
+  /// 这三份以前漏了：失败一次就把改动悬在内存里，进程被杀掉就真没了）。
+  Timer? _pathsRetry;
+
   void _flushPaths() {
+    _pathsRetry?.cancel();
+    _pathsRetry = null;
     if (!_pathsDirty || !_rootOk) return;
-    if (_writeJson(_pathsFile, '下载路径', _localPaths)) _pathsDirty = false;
+    if (_writeJson(_pathsFile, '下载路径', _localPaths)) {
+      _pathsDirty = false;
+    } else {
+      _pathsRetry = Timer(const Duration(seconds: 20), _flushPaths);
+    }
   }
 
 
@@ -266,6 +276,40 @@ class LibraryStore extends ChangeNotifier {
       list.insert(0, s);
     }
     _markDirty(LibraryKind.favorites);
+  }
+
+  /// 整单收进收藏：一批只插一次、只通知一次，返回真正新增的那些。
+  ///
+  /// 「播放全部」旁边原来只有一颗一颗的红心，五十首的歌单要点五十下。
+  List<Song> addFavorites(Iterable<Song> songs) {
+    final list = _by[LibraryKind.favorites]!;
+    final added = notYetFavorite(list, songs);
+    if (added.isEmpty) return added;
+    list.insertAll(0, added);
+    _markDirty(LibraryKind.favorites);
+    return added;
+  }
+
+  /// 一批歌里收藏还缺的那几首，顺序照给进来的那份。
+  ///
+  /// 已经在收藏里的不能重复插：界面要说的是「已收进 N 首」而不是「已全部收下」
+  /// （报大了就是骗人），而撤销只撤这次真加进去的，她原来自己收过的得留下。
+  static List<Song> notYetFavorite(List<Song> favorites, Iterable<Song> songs) {
+    final keys = {for (final e in favorites) keyOf(e)};
+    final out = <Song>[];
+    for (final s in songs) {
+      if (keys.add(keyOf(s))) out.add(s);
+    }
+    return out;
+  }
+
+  /// 把 [addFavorites] 刚加的那一批拿掉。
+  void removeFavorites(Iterable<Song> songs) {
+    final list = _by[LibraryKind.favorites]!;
+    final drop = {for (final s in songs) keyOf(s)};
+    final before = list.length;
+    list.removeWhere((e) => drop.contains(keyOf(e)));
+    if (list.length != before) _markDirty(LibraryKind.favorites);
   }
 
   void recordRecent(Song s) {
@@ -580,10 +624,17 @@ class LibraryStore extends ChangeNotifier {
 
   bool _playlistsDirty = false;
 
+  /// 见 [_pathsRetry]：这一份是她的自建歌单本身，写丢了就是整单不见。
+  Timer? _playlistsRetry;
+
   void _flushPlaylists() {
+    _playlistsRetry?.cancel();
+    _playlistsRetry = null;
     if (!_playlistsDirty || !_rootOk) return;
     if (_writeJson(_playlistsFile, '自建歌单', _playlists.map((p) => p.toJson()).toList())) {
       _playlistsDirty = false;
+    } else {
+      _playlistsRetry = Timer(const Duration(seconds: 20), _flushPlaylists);
     }
   }
 
@@ -763,10 +814,17 @@ class LibraryStore extends ChangeNotifier {
 
   bool _sheetsDirty = false;
 
+  /// 见 [_pathsRetry]：这一份是她在应用里收藏过的歌单，写丢了就是整批红心白点。
+  Timer? _sheetsRetry;
+
   void _flushSheets() {
+    _sheetsRetry?.cancel();
+    _sheetsRetry = null;
     if (!_sheetsDirty || !_rootOk) return;
     if (_writeJson(_sheetsFile, '收藏的歌单', _sheets.map((s) => s.toJson()).toList())) {
       _sheetsDirty = false;
+    } else {
+      _sheetsRetry = Timer(const Duration(seconds: 20), _flushSheets);
     }
   }
 

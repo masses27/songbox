@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../util/app_log.dart';
+import '../player/player_bar.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
@@ -78,36 +79,44 @@ class _LogPageState extends State<LogPage> {
                         color: AppTheme.textPrimary),
                   ),
                 ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
-          child: Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  // 刚清过空的时候按下去只会复制一段抬头，她还以为复制成功了 ——
-                  // 没内容就把按钮关掉，比弹一条没用的提示明白得多。
-                  onPressed: _text.isEmpty ? null : _copy,
-                  icon: const Icon(Icons.copy_all, size: 18),
-                  label: const Text('复制全部发我'),
-                  style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
-                ),
+      // 这一页也得挂着播放条：她从播放页一路走到这里看证据，歌还在放，条却没了，
+      // 看上去就像歌自己停了。播放条让下面那行自己避系统导航条，它就不必再垫一次。
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const PlayerBar(reserveNavInset: false),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      // 刚清过空的时候按下去只会复制一段抬头，她还以为复制成功了 ——
+                      // 没内容就把按钮关掉，比弹一条没用的提示明白得多。
+                      onPressed: _text.isEmpty ? null : _copy,
+                      icon: const Icon(Icons.copy_all, size: 18),
+                      label: const Text('复制全部发我'),
+                      style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  TextButton(
+                    onPressed: _text.isEmpty
+                        ? null
+                        : () async {
+                            await AppLog.clear();
+                            if (!mounted) return;
+                            setState(() => _loading = true);
+                            _load();
+                          },
+                    child: const Text('清空'),
+                  ),
+                ],
               ),
-              const SizedBox(width: 10),
-              TextButton(
-                onPressed: _text.isEmpty
-                    ? null
-                    : () async {
-                        await AppLog.clear();
-                        if (!mounted) return;
-                        setState(() => _loading = true);
-                        _load();
-                      },
-                child: const Text('清空'),
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

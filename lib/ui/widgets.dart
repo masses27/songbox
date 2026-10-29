@@ -718,7 +718,7 @@ class _OtherVersionsSheet extends StatefulWidget {
 }
 
 class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
-  late Future<List<Song>> _future = BuiltinLibrary.instance.otherVersions(widget.song);
+  late Future<TwinSearch> _future = BuiltinLibrary.instance.otherVersions(widget.song);
 
   void _reload() => setState(() {
         _future = BuiltinLibrary.instance.otherVersions(widget.song);
@@ -759,7 +759,7 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
             ),
             Divider(height: 1, color: Theme.of(context).dividerColor),
             Expanded(
-              child: FutureBuilder<List<Song>>(
+              child: FutureBuilder<TwinSearch>(
                 future: _future,
                 builder: (ctx, snap) {
                   if (snap.connectionState != ConnectionState.done) {
@@ -769,32 +769,58 @@ class _OtherVersionsSheetState extends State<_OtherVersionsSheet> {
                             height: 26,
                             child: CircularProgressIndicator(strokeWidth: 2.4)));
                   }
-                  final found = snap.data ?? const <Song>[];
+                  final res = snap.data;
+                  final found = res?.songs ?? const <Song>[];
+                  final failed = (res?.failed ?? const <String>[]).map(sourceLabel).join('、');
                   if (found.isEmpty) {
                     // 按钮直接放在这一格上，不用她自己退出去找搜索页。
+                    // 有哪家没答话就不能把这一格写成「没找到别的版本」：那部分搜索
+                    // 根本没跑成，她能做的只有再搜一遍，而不是换个关键词再撞一次。
+                    final partial = res?.incomplete == true;
+                    final allSilent = res?.allSilent == true;
                     return SingleChildScrollView(
                       child: Column(
                       children: [
-                        const EmptyState(
-                          icon: Icons.music_off_outlined,
-                          message: '没找到同一首歌的其他版本\n换个关键词说不定能搜到',
+                        EmptyState(
+                          icon: partial ? Icons.cloud_off : Icons.music_off_outlined,
+                          message: allSilent
+                              ? '这几家这次都没答话：$failed\n看一下网络，再搜一遍'
+                              : partial
+                                  ? '没搜到别的版本，但 $failed这次没答话\n再搜一遍看看'
+                                  : '没找到同一首歌的其他版本\n换个关键词说不定能搜到',
                         ),
                         Padding(
                           padding: const EdgeInsets.only(bottom: 20),
                           child: FilledButton.tonal(
-                              onPressed: () {
-                                Navigator.pop(ctx);
-                                SearchPage.open(context, widget.song.name);
-                              },
-                              child: const Text('去搜索')),
+                              onPressed: partial
+                                  ? _reload
+                                  : () {
+                                      Navigator.pop(ctx);
+                                      SearchPage.open(context, widget.song.name);
+                                    },
+                              child: Text(partial ? '再搜一遍' : '去搜索')),
                         ),
                       ],
                       ),
                     );
                   }
-                  return ListView.builder(
-                    itemCount: found.length,
-                    itemBuilder: (_, i) => _row(ctx, found[i]),
+                  return Column(
+                    children: [
+                      // 搜到的那几家摆出来了，没搜动的也得说一句：她以为这一版只有
+                      // 这几条，其实还有一家根本没答话。
+                      if (failed.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                          child: Text('$failed这次没答话，下面这些来自搜到的那几家',
+                              style: TextStyle(fontSize: 11.5, color: AppTheme.textSecondary)),
+                        ),
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: found.length,
+                          itemBuilder: (_, i) => _row(ctx, found[i]),
+                        ),
+                      ),
+                    ],
                   );
                 },
               ),
@@ -1072,10 +1098,30 @@ Future<void> requestDownload(BuildContext context, Song song) async {
   );
 }
 
+/// 整单收进收藏：列表页「播放全部」旁边那颗心。
+///
+/// 五十首的歌单以前要一首一首点五十下才收得完。报出去的数字是这次真加了几首，
+/// 本来就在收藏里的那些不算进去（否则「已收藏 50 首」里有 20 首是骗她的），
+/// 撤销也只撤这一批——她原来自己收过的不能跟着消失。
+void collectAllFavorites(BuildContext context, List<Song> songs) {
+  final store = LibraryStore.instance;
+  final added = store.addFavorites(songs);
+  if (added.isEmpty) {
+    toast(context, '这一单里的歌本来就都在收藏里了');
+    return;
+  }
+  final left = songs.length - added.length;
+  toast(
+    context,
+    left == 0 ? '已收进收藏 ${added.length} 首' : '已收进收藏 ${added.length} 首，另 $left 首本来就在',
+    actionLabel: '撤销',
+    onAction: () => store.removeFavorites(added),
+  );
+}
+
 /// 上一条「带按钮的提示」还挂在屏上的截止时间。全局一个就够：提示条本来也是
 /// 全局只有一个 ScaffoldMessenger 在排。
 DateTime? _actionToastUntil;
-
 /// 一句话提示。收藏/排队这类操作点了没有别的可见变化，不吭一声她分不清
 /// 是没生效还是没点上。可选一个「撤销」动作。
 ///

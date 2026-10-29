@@ -122,12 +122,18 @@ class _RankDetailPageState extends State<RankDetailPage> {
       appBar: AppBar(
         title: Text(widget.title),
         actions: [
-          if (_songs.isNotEmpty)
+          if (_songs.isNotEmpty) ...[
+            IconButton(
+              tooltip: '把这一榜收进收藏',
+              icon: const Icon(Icons.favorite),
+              onPressed: () => collectAllFavorites(context, _songs),
+            ),
             IconButton(
               tooltip: '播放整个列表',
               icon: const Icon(Icons.play_circle_outline),
               onPressed: () => context.read<PlayerService>().playList(_songs, 0),
             ),
+          ],
         ],
       ),
       backgroundColor: AppTheme.pageBg,

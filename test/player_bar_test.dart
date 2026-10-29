@@ -40,6 +40,9 @@ class _FakePlayerService extends ChangeNotifier implements PlayerService {
   bool get busy => false;
   @override
   String? get waitNote => null;
+  bool buffering = false;
+  @override
+  bool get isBuffering => buffering;
   @override
   Duration? get seekHold => null;
   @override
@@ -296,6 +299,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('播放队列 · 2 首'), findsOneWidget);
     expect(player.playCalls + player.toggleCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('缓冲时这一行改成「在缓冲…」，通了就回到歌手名', (tester) async {
+    final player = _FakePlayerService();
+    addTearDown(player.dispose);
+    await _pumpBar(tester, player);
+    expect(find.text(player.current!.singer), findsOneWidget);
+    player.buffering = true;
+    player.states.add(PlayerState(true, ProcessingState.buffering));
+    await tester.pumpAndSettle();
+    expect(find.text('在缓冲…'), findsOneWidget);
+    expect(find.text(player.current!.singer), findsNothing);
+    player.buffering = false;
+    player.states.add(PlayerState(true, ProcessingState.ready));
+    await tester.pumpAndSettle();
+    expect(find.text('在缓冲…'), findsNothing);
+    expect(find.text(player.current!.singer), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

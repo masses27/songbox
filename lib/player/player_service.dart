@@ -253,6 +253,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _sleepTick;
   DateTime? _sleepEndsAt;
 
+  /// 定时关闭这一轮的编号。到点淡出要跑两秒多，这期间她完全可能改成「再来 30 分钟」
+  /// 或者干脆取消——淡出跑完时必须发现这一轮已经不是自己那轮了，不然会把刚点开的歌掐停。
+  int _sleepGen = 0;
+
   /// How many consecutive tracks failed to resolve since the last success — the
   /// guard that keeps auto-skip from spinning through the queue forever.
   int _failStreak = 0;
@@ -374,6 +378,11 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   Duration get position => _ap.position;
   Duration? get duration => _ap.duration;
 
+  /// 该出声却没出声的一种：按钮写着在放，内核停在缓冲里。断流既不报错也不进 idle，
+  /// 屏幕上不说这一句就只剩「歌卡死了」，而她只能反复按播放试。
+  bool get isBuffering =>
+      !busy && _ap.playing && _ap.processingState == ProcessingState.buffering;
+
   Song? get current => index >= 0 && index < queue.length ? queue[index] : null;
   bool get hasCurrent => current != null;
 
@@ -412,6 +421,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
         _scheduleBridgeHeal('放歌中途桥被拆了');
         _tellIfIdleStopped();
       }
+      // 缓冲起止也要 notify：播放页那一行和播放条写的是「缓冲中」「在缓冲」，
+      // 这条流不到就不刷新，屏幕上会留着上一句（这条流只在 playing/processingState
+      // 变了才推，不是位置 tick，量很小）。
+      notifyListeners();
     });
     _playingSub = _ap.playingStream.listen((p) {
       // 那张卡是进入播放态那一刻才贴上去的，所以每次开始放之后都去原生看一眼。
@@ -1701,6 +1714,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Countdown to pause playback — the bedtime feature every music app has.
   void setSleepTimer(Duration d) {
+    _sleepGen++;
     _sleepTimer?.cancel();
     _sleepTick?.cancel();
     _lastSleep = d;
@@ -1709,12 +1723,21 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     _sleepTimer = Timer(d, _onSleepElapsed);
     // Repaint the remaining-time label without a per-second ticker storm.
     _sleepTick = Timer.periodic(const Duration(seconds: 20), (_) => notifyListeners());
-    notice = '将在 ${d.inMinutes} 分钟后停止播放';
+    notice = '将在 ${sleepLengthLabel(d)}后停止播放';
     noticeTick++;
     notifyListeners();
   }
 
+  /// 定时菜单里那几个时长说人话：过了一个钟头还写「90 分钟」，得她自己换算。
+  static String sleepLengthLabel(Duration d) {
+    final m = d.inMinutes;
+    if (m < 60) return '$m 分钟';
+    final rest = m % 60;
+    return rest == 0 ? '${m ~/ 60} 小时' : '${m ~/ 60} 小时 $rest 分钟';
+  }
+
   void cancelSleepTimer() {
+    _sleepGen++;
     _sleepTimer?.cancel();
     _sleepTick?.cancel();
     _sleepTimer = null;
@@ -1728,12 +1751,27 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  void _onSleepElapsed() {
+  Future<void> _onSleepElapsed() async {
+    final gen = _sleepGen;
     _sleepTimer = null;
     _sleepTick?.cancel();
     _sleepTick = null;
     _sleepEndsAt = null;
+    // 到点先把音量收小再停：直接 pause 是在耳朵里「啪」一下切断，而定了时的人
+    // 本来就快睡着了——被吵醒的那一下正是这一刀。淡出跑完前她若改了定时或取消，
+    // 这一轮就不是我这一轮了，直接收手，别把刚点开的歌掐停。
+    final from = _ap.volume;
+    if (from > 0.01 && _ap.playing) {
+      for (var i = 1; i <= 5; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (gen != _sleepGen) return;
+        await _ap.setVolume((from * (5 - i) / 5).clamp(0.0, 1.0));
+      }
+    }
+    if (gen != _sleepGen) return;
     unawaited(_ap.pause());
+    // 音量得在停之后交回去，不然她下次点开是静音的。
+    unawaited(_ap.setVolume(from));
     sleepJustEnded = true;
     notice = '定时播放已到点，已停止';
     noticeTick++;

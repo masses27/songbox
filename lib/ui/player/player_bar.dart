@@ -42,6 +42,9 @@ class _PlayerBarState extends State<PlayerBar> {
         builder: (context, snap) {
           final playing = snap.data?.playing == true;
           final loading = player.busy || snap.data?.processingState == ProcessingState.loading;
+          // 缓冲要吭一声：这一行原来只有歌手名，卡住时既不报错也不动，
+          // 看上去像整条 bar 死了，她只能把应用关掉重开。
+          final note = player.waitNote ?? (player.isBuffering ? '在缓冲…' : null);
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -72,12 +75,12 @@ class _PlayerBarState extends State<PlayerBar> {
                                   ),
                                   Text(
                                     // 等重连这一句要常驻：提示条两秒就收，而那后面可能是 15 秒、30 秒。
-                                    player.waitNote ?? song.singer,
+                                    note ?? song.singer,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                         fontSize: 11,
-                                        color: player.waitNote == null ? AppTheme.textSecondary : AppTheme.primary),
+                                        color: note == null ? AppTheme.textSecondary : AppTheme.primary),
                                   ),
                                 ],
                               ),

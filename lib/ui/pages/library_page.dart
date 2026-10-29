@@ -587,26 +587,51 @@ class _ProgressBar extends StatelessWidget {
 }
 
 /// 收藏 / 最近播放超过 50 首时的完整列表：ExpansionTile 里铺几百行会明显卡顿。
-class _FullListPage extends StatelessWidget {
+class _FullListPage extends StatefulWidget {
   final LibraryKind kind;
   final String title;
   const _FullListPage({required this.kind, required this.title});
 
   @override
+  State<_FullListPage> createState() => _FullListPageState();
+}
+
+class _FullListPageState extends State<_FullListPage> {
+  /// 就地筛一行字。收藏涨到两三百首之后，找那一首要翻好几屏，而唯一的搜索入口在
+  /// 另一个页面上——跳出去搜等于把这份列表丢了，也看不到「这首歌我到底收没收」。
+  final TextEditingController _filter = TextEditingController();
+
+  @override
+  void dispose() {
+    _filter.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final store = context.watch<LibraryStore>();
-    final list = store.list(kind);
-    final grouped = kind == LibraryKind.recent;
-    final items = grouped ? _historyItems(store, list) : List<Object>.from(list);
+    final list = store.list(widget.kind);
+    final grouped = widget.kind == LibraryKind.recent;
+    final q = _filter.text.trim().toLowerCase();
+    final shown = q.isEmpty
+        ? list
+        : list
+            .where((s) =>
+                s.name.toLowerCase().contains(q) || s.singer.toLowerCase().contains(q))
+            .toList();
+    final items = grouped ? _historyItems(store, shown) : List<Object>.from(shown);
     return Scaffold(
       appBar: AppBar(
-        title: Text('$title · ${list.length}'),
+        title: Text(q.isEmpty
+            ? '${widget.title} · ${list.length}'
+            // 筛的时候两个数都要给：只写「3」她不知道是从几百首里挑出来的还是列表就剩三首。
+            : '${widget.title} · ${shown.length}/${list.length}'),
         actions: [
-          if (list.isNotEmpty)
+          if (shown.isNotEmpty)
             IconButton(
-              tooltip: '播放全部',
+              tooltip: q.isEmpty ? '播放全部' : '播放筛出来的 ${shown.length} 首',
               icon: const Icon(Icons.play_arrow),
-              onPressed: () => context.read<PlayerService>().playList(list, 0),
+              onPressed: () => context.read<PlayerService>().playList(shown, 0),
             ),
         ],
       ),
@@ -614,22 +639,68 @@ class _FullListPage extends StatelessWidget {
       bottomNavigationBar: const PlayerBar(),
       body: list.isEmpty
           ? const EmptyState(message: '这个列表已经空了')
-          : ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: items.length,
-              separatorBuilder: (_, i) => _rowDivider(items, i),
-              itemBuilder: (context, i) {
-                final it = items[i];
-                if (it is String) return _dayHeader(it);
-                final s = it as Song;
-                return SongListRow(
-                  song: s,
-                  // 分过段之后序号只是行号，日期才是她要找的东西；没分段时保留网易云那种编号。
-                  number: grouped ? null : i + 1,
-                  siblings: list,
-                  extraTrailing: _RemoveButton(kind: kind, song: s),
-                );
-              },
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppTheme.pillBg,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: TextField(
+                      controller: _filter,
+                      textInputAction: TextInputAction.search,
+                      onChanged: (_) => setState(() {}),
+                      style: TextStyle(fontSize: 14, color: AppTheme.textPrimary),
+                      decoration: InputDecoration(
+                        hintText: '在这里找一首',
+                        hintStyle: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+                        border: InputBorder.none,
+                        isDense: true,
+                        icon: Icon(Icons.filter_alt_outlined, size: 20, color: AppTheme.textSecondary),
+                        suffixIcon: q.isEmpty
+                            ? null
+                            : IconButton(
+                                iconSize: 18,
+                                visualDensity: VisualDensity.compact,
+                                tooltip: '清空',
+                                icon: Icon(Icons.close, color: AppTheme.textSecondary),
+                                onPressed: () {
+                                  _filter.clear();
+                                  setState(() {});
+                                },
+                              ),
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: items.isEmpty
+                      ? EmptyState(
+                          message: '这里没有含「${_filter.text.trim()}」的歌\n清空上面那行就看得到全部',
+                          icon: Icons.music_off_outlined,
+                        )
+                      : ListView.separated(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          itemCount: items.length,
+                          separatorBuilder: (_, i) => _rowDivider(items, i),
+                          itemBuilder: (context, i) {
+                            final it = items[i];
+                            if (it is String) return _dayHeader(it);
+                            final s = it as Song;
+                            return SongListRow(
+                              song: s,
+                              // 分过段之后序号只是行号，日期才是她要找的东西；没分段时保留网易云那种编号。
+                              number: grouped ? null : i + 1,
+                              siblings: shown,
+                              extraTrailing: _RemoveButton(kind: widget.kind, song: s),
+                            );
+                          },
+                        ),
+                ),
+              ],
             ),
     );
   }

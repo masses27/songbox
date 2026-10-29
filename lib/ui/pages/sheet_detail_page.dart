@@ -192,6 +192,13 @@ class _SheetDetailPageState extends State<SheetDetailPage> {
                                 ? '播放已加载 ${_songs.length} 首'
                                 : '播放全部 ${_songs.length} 首'),
                           ),
+                          // 整单收下：一首一首点红心点五十下不是「收藏这张歌单」。
+                          // 这一行收的是歌里的每一首，和上面那颗收歌单本身的心不是一回事，
+                          // 所以干脆写字：两颗一样的心放在一页里，只能靠猜。
+                          TextButton(
+                            onPressed: () => collectAllFavorites(context, _songs),
+                            child: const Text('全部收进收藏', style: TextStyle(fontSize: 13)),
+                          ),
                         ],
                       ),
                     ),

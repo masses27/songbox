@@ -507,25 +507,29 @@ class BuiltinLibrary {
   ///
   /// 摆出来的每一条都得是她点下去就有声音的那类，所以只有能端内取整首的几家：
   /// 酷我的行点开会走一次换源，运气好放出的是别家同名，运气不好就是一场空等。
-  Future<List<Song>> otherVersions(Song song) async {
+  ///
+  /// 哪家根本没搜动要单独带出来，见 [TwinSearch]。
+  Future<TwinSearch> otherVersions(Song song) async {
     final keyword = '${song.name} ${song.singer}'.trim();
-    if (keyword.isEmpty) return const [];
+    if (keyword.isEmpty) return TwinSearch(songs: const [], failed: const [], asked: 0);
     final found = <Song>[];
-    try {
-      found.addAll((await WySearch().search(keyword, limit: 20)).list);
-    } catch (_) {}
-    try {
-      found.addAll((await TxSearch().search(keyword, limit: 10)).list);
-    } catch (_) {}
-    try {
-      // 「这首放不出」的时候长按找版本，B 站那条整首也该摆在她能挑的列表里。
-      found.addAll(await BlSource.findTwins(song.name, song.singer, wantSec: song.interval, max: 6));
-    } catch (_) {}
-    try {
-      // 酷狗同理：匿名给整首的那 128k 也是一条能放的路，挡在墙后面的会带会员角标。
-      found.addAll(await KgNative.searchSongs(keyword, limit: 10));
-    } catch (_) {}
-    return pickTwins(found, song, max: 24, loose: true);
+    final failed = <String>[];
+    var asked = 0;
+    Future<void> one(String source, Future<List<Song>> Function() run) async {
+      asked++;
+      try {
+        found.addAll(await run());
+      } catch (_) {
+        failed.add(source);
+      }
+    }
+
+    // 一家问一次，顺序照旧：这几条搜索并发打出去正是风控爱看的形状。
+    await one('wy', () async => (await WySearch().search(keyword, limit: 20)).list);
+    await one('tx', () async => (await TxSearch().search(keyword, limit: 10)).list);
+    await one('bl', () => BlSource.findTwins(song.name, song.singer, wantSec: song.interval, max: 6));
+    await one('kg', () => KgNative.searchSongs(keyword, limit: 10));
+    return TwinSearch(songs: pickTwins(found, song, max: 24, loose: true), failed: failed, asked: asked);
   }
 
   /// 从另一平台的搜索结果里挑「就是这一首」的那条。
@@ -692,6 +696,29 @@ class BuiltinLibrary {
     }
     return LyricResult(lyric: '');
   }
+}
+
+/// 「找其他版本」的返回：能挑的那批，和哪几家根本没搜动。
+///
+/// 原来四家搜索的异常全被吞掉，「一家都没问出去」和「确实只有这一个版本」交回的是
+/// 同一个空列表，界面只能写「没找到同一首歌的其他版本，换个关键词说不定能搜到」——
+/// 那是句谎话，而她当时该做的是再搜一遍，不是换个词。
+class TwinSearch {
+  final List<Song> songs;
+
+  /// 没搜动的来源码（wy/tx/bl/kg），按问过的顺序。
+  final List<String> failed;
+
+  /// 一共问了几家。界面上要分清「一家都没答话」和「答话的那几家确实没有」。
+  final int asked;
+
+  /// 一家都没答话，或答话的那几家之外还有没跑成的：这批空结果当不了结论。
+  bool get incomplete => songs.isEmpty && failed.isNotEmpty;
+
+  /// 问过的几家全没答话。
+  bool get allSilent => songs.isEmpty && failed.length >= asked && asked > 0;
+
+  TwinSearch({required this.songs, required this.failed, required this.asked});
 }
 
 /// 一次取链过程的失败台账。
