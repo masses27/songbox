@@ -142,12 +142,35 @@ class WyCatalog {
   static Future<List<ArtistInfo>> topArtists({int page = 1, int limit = 30}) async {
     final body = await WyNative.getJson('/api/artist/top',
         query: {'offset': '${(page - 1) * limit}', 'limit': '$limit'});
-    final raw = (body['artists'] is List) ? body['artists'] as List : const [];
-    return raw
-        .whereType<Map>()
-        .map((e) => ArtistInfo.fromNetEase(e))
-        .whereType<ArtistInfo>()
-        .toList();
+    return _artists(body['artists']);
+  }
+
+  /// 按字母取一桶歌手。[initial] 就是接口的 `initial` 值：**大写字母的字符码**
+  /// （`Z` 要传 `90`，`A` 传 `65`），界面那边由 `rosterInitialCode` 负责换算。
+  ///
+  /// 三条规矩全是 2026-10-29 探针打出来的（`research/discover/probe_roster*.out` 是同一次跑的）：
+  ///
+  /// 1. 传字母本身（`z`、`Z`）一律 400；`0` 那一桶装的是数字/符号/生僻开头的「其它」，
+  ///    而 `-1`（老网页上的「全部」）在这里只回一份默认流 —— 林俊杰、陈奕迅、薛之谦打头，
+  ///    跟字母桶都不重样，它是「推荐的那批」，不是 26 桶的并集，拿它当全量会说谎。
+  /// 2. 窗口规矩：`offset + limit` 一超过 100 就**整页回空**，不是回半页
+  ///    （实测 limit=50/offset=50 拿回 50 位，limit=51/offset=50 拿回 0 位）。
+  ///    所以一桶最多 100 位，翻页在这个接口上不存在，[limit] 也不该越过 100。
+  /// 3. `page`/`cat`/`area`/`order` 都是摆设：加与不加，回的是同一批。
+  ///
+  /// 26 个字母桶各回满 100 位、跨桶去重还是 2600（零重叠），`0` 那桶再补 100 位、
+  /// 与 26 桶也零重叠 —— 这一份名单一共 2700 位。这是接口给的窗口，不是曲库全量，
+  /// 界面上的字要说「每个字母前 100 位」。
+  static Future<List<ArtistInfo>> artistsByLetter(String initial, {int limit = 100}) async {
+    final body = await WyNative.getJson('/api/artist/list', query: {
+      'cat': '1001',
+      'area': '-1',
+      'order': 'hot',
+      'initial': initial,
+      'offset': '0',
+      'limit': '$limit',
+    });
+    return _artists(body['artists']);
   }
 
   /// 新歌速递：一次 100 首，不走个性化。
@@ -215,6 +238,12 @@ class WyCatalog {
       .whereType<Map>()
       .map((e) => AlbumInfo.fromNetEase(e))
       .whereType<AlbumInfo>()
+      .toList();
+
+  static List<ArtistInfo> _artists(dynamic raw) => ((raw is List) ? raw : const [])
+      .whereType<Map>()
+      .map((e) => ArtistInfo.fromNetEase(e))
+      .whereType<ArtistInfo>()
       .toList();
 
   static List<SheetInfo> _sheets(dynamic raw) {

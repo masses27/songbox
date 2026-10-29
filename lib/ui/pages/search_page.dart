@@ -13,6 +13,7 @@ import '../theme.dart';
 import '../widgets.dart';
 import 'album_page.dart';
 import 'artist_page.dart';
+import 'artist_roster_page.dart';
 import 'builtin_library.dart';
 import 'sheet_detail_page.dart';
 
@@ -428,14 +429,53 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
     }
     switch (_kind) {
       case 1:
-        return _refresh(_list<ArtistInfo>(_current, _artistTile));
+        return _refresh(_list<ArtistInfo>(_current, _artistTile,
+            lead: const _RosterLead(),
+            emptyExtra: _songsInstead(_current)));
       case 2:
-        return _refresh(_list<AlbumInfo>(_current, _albumTile));
+        return _refresh(_list<AlbumInfo>(_current, _albumTile,
+            emptyExtra: _songsInstead(_current)));
       case 3:
-        return _refresh(_list<SheetInfo>(_current, _sheetTile));
+        return _refresh(_list<SheetInfo>(_current, _sheetTile,
+            emptyExtra: _songsInstead(_current)));
       default:
         return _refresh(_list<Song>(_current, _songTile));
     }
+  }
+
+  /// 这一栏一头空时那句「换到歌里搜」：歌手/专辑/歌单三栏都可能对上同一批关键词，
+  /// 而「这个名字搜不到」不等于「这个词在曲库里没东西」——她打的多半是个歌名。
+  /// 词没搜出来时不该把整页判死，得留一条不用重打关键词的路。
+  Widget? _songsInstead(_Tab tab) {
+    if (tab.items.isNotEmpty || tab.loading || tab.error != null) return null;
+    final kw = tab.keyword.isEmpty ? normalizeKeyword(_ctrl.text) : tab.keyword;
+    if (kw.isEmpty) return null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+      child: Center(
+        child: OutlinedButton(
+          onPressed: () => _searchSongs(kw),
+          child: Text('换成在歌里搜「$kw」', style: const TextStyle(fontSize: 13)),
+        ),
+      ),
+    );
+  }
+
+  /// 从歌手/专辑/歌单那一栏改道去搜歌：同一个词递过去，栏位切回「单曲」，
+  /// 不重开一页、也不用她再打一遍。
+  void _searchSongs(String kw) {
+    _ctrl.text = kw;
+    _ctrl.selection = TextSelection.collapsed(offset: kw.length);
+    _suggestTimer?.cancel();
+    setState(() {
+      _kind = 0;
+      _suggest = const [];
+      _suggestFor = '';
+      _resetAll();
+    });
+    // 先把 _kind 摆过去再动 TabController：监听器看见两边一致就自己返回，不会重跑一次。
+    _tabCtrl.index = 0;
+    _run(tab: _tabs[0]);
   }
 
   /// 下拉只重刷当前这一栏：别的栏已经搜出来的东西不该被这一次下拉清掉。
@@ -453,7 +493,10 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
         child: child,
       );
 
-  Widget _list<T>(_Tab tab, Widget Function(BuildContext, T) tile) {
+  /// [lead] 是常驻在这一栏最上面的一条（歌手栏那条「按字母翻名单」），有没有结果都在；
+  /// [emptyExtra] 只在「这一栏一头空」时补在提示下面。别的栏两个都不传。
+  Widget _list<T>(_Tab tab, Widget Function(BuildContext, T) tile,
+      {Widget? lead, Widget? emptyExtra}) {
     if (tab.loading && tab.items.isEmpty) {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -475,6 +518,7 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
+          ?lead,
           EmptyState(
               message: tab.alternatives.isEmpty
                   ? '没搜到「${tab.keyword}」，换个关键词再试'
@@ -496,12 +540,13 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
                 ],
               ),
             ),
+          ?emptyExtra,
         ],
       );
     }
     // 核对过的结果要在上面先说一句「每张都查过曲目表」，不然她以为
     // 这跟普通搜歌单是一回事。
-    final head = tab.note == null ? 0 : 1;
+    final head = (tab.note == null ? 0 : 1) + (lead == null ? 0 : 1);
     return ListView.separated(
       controller: tab.scroll,
       // 首屏只有几行时列表根本不滚，下拉手势也就够不着；强行给一条可滚的物理。
@@ -509,18 +554,23 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
       itemCount: tab.items.length + 1 + head,
       separatorBuilder: (_, _) => Divider(height: 1, color: AppTheme.divider),
       itemBuilder: (context, i) {
-        if (head == 1) {
-          if (i == 0) {
+        var j = i;
+        if (tab.note != null) {
+          if (j == 0) {
             return Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               child: Text(tab.note!,
                   style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             );
           }
-          i -= 1;
+          j -= 1;
         }
-        if (i >= tab.items.length) return _footer(tab);
-        return tile(context, tab.items[i] as T);
+        if (lead != null) {
+          if (j == 0) return lead;
+          j -= 1;
+        }
+        if (j >= tab.items.length) return _footer(tab);
+        return tile(context, tab.items[j] as T);
       },
     );
   }
@@ -807,5 +857,28 @@ class _HistoryList extends StatelessWidget {
     if (!context.mounted) return;
     toast(context, '已删掉「$kw」',
         actionLabel: '撤销', onAction: () => AppSettings.instance.restoreSearch(kw, i));
+  }
+}
+
+/// 歌手那一栏最上面那条：把「按字母整份翻名单」摆在搜完就看得见的位置。
+/// 这一栏只给接口那 10 位，翻名单是不重打关键词就能多看几千位的另一条路。
+class _RosterLead extends StatelessWidget {
+  const _RosterLead();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      visualDensity: const VisualDensity(vertical: -1),
+      leading: Icon(Icons.people_outline, size: 22, color: AppTheme.textSecondary),
+      title: const Text('按字母翻明星名单', style: TextStyle(fontSize: 14)),
+      subtitle: const Text('A–Z 加一格「其它」，每格前 100 位 · 进去直接筛名字或别名',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 11.5)),
+      trailing: Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary),
+      onTap: () => Navigator.push(
+          context, MaterialPageRoute(builder: (_) => const ArtistRosterPage())),
+    );
   }
 }

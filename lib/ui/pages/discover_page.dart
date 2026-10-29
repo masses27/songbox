@@ -11,6 +11,7 @@ import '../rank_groups.dart';
 import '../widgets.dart';
 import 'album_page.dart';
 import 'artist_page.dart';
+import 'artist_roster_page.dart';
 import 'builtin_library.dart';
 import 'rank_detail_page.dart';
 import 'sheet_detail_page.dart';
@@ -216,6 +217,7 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop, Sho
               tile: (context, a, _) => _ArtistCard(artist: a),
             ),
           ),
+          const SliverToBoxAdapter(child: _RosterEntry()),
           SliverToBoxAdapter(child: _SheetCategories(key: _sheetBlockKey)),
           SliverToBoxAdapter(
             child: SectionHeader('榜单',
@@ -628,6 +630,48 @@ class _ArtistCard extends StatelessWidget {
                   style: const TextStyle(fontSize: 11.5)),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 横向那一排只有 12 位热门，翻不了几个字。这一行把「按字母整份看」那条路递到眼前，
+/// 副标要说清它是每个字母前 100 位 —— 名单是接口给的窗口，不是曲库全量。
+class _RosterEntry extends StatelessWidget {
+  const _RosterEntry();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const ArtistRosterPage())),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(color: AppTheme.pillBg, borderRadius: BorderRadius.circular(8)),
+          child: Row(
+            children: [
+              Icon(Icons.people_outline, size: 20, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('按字母翻明星名单', style: TextStyle(fontSize: 14)),
+                    SizedBox(height: 2),
+                    Text('A–Z 加一格「其它」，每格前 100 位 · 进去直接筛名字或别名',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11.5)),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary),
+            ],
+          ),
         ),
       ),
     );

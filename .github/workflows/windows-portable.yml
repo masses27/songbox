@@ -46,6 +46,22 @@ jobs:
           dart tool/patch_windows.dart
           if ($LASTEXITCODE -ne 0) { throw 'Windows runner patch failed' }
 
+      - name: 换成我们自己的图标
+        shell: powershell
+        # 任务栏那颗图标不是「外面配的」，是从 lyric_music.exe 自己的资源里读的：runner 的
+        # 窗口类拿 IDI_APP_ICON（windows/runner/win32_window.cpp），而 IDI_APP_ICON 就是
+        # Runner.rc 里那句 `ICON "resources\app_icon.ico"`。flutter create 往那个位置放的是
+        # Flutter 自己的 logo，所以以前只有启动器带我们的标、窗口一开起来任务栏就换成了
+        # Flutter 那颗。构建前把它覆盖掉，zip 和单文件两条路一起好。
+        #
+        # 走 5.1、正文纯 ASCII 那两条理由写在下面「单文件版」那条注释里；图标逻辑本体都在
+        # tool/windows/make_icon.ps1，这里只是把它装进壳子。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mk = Join-Path $env:GITHUB_WORKSPACE 'tool/windows/make_icon.ps1'
+          if (-not (Test-Path $mk)) { throw "icon script missing: $mk" }
+          & $mk -RunnerResourceDir 'windows/runner/resources'
+
       - name: pub get
         shell: pwsh
         run: flutter pub get
@@ -78,6 +94,16 @@ jobs:
           if (-not $mpv) { throw 'libmpv-2.dll 没进包：media_kit 那条音频后端起不来' }
           "libmpv: $([math]::Round($mpv.Length/1MB,1))MB"
 
+          # 图标要验的是「她双击的那颗 exe 里有没有」，不是「我们生成过一张 ico」。上面那步
+          # 万一没盖对位置（模板换了目录、rc 不认这张 ico），构建照样成功、任务栏照样是
+          # Flutter 那颗。编源文件时每一帧 ICO 会原样落成一条 RT_ICON（本机拿 csc -win32icon
+          # 编过一颗试验 exe 核对：最大那帧的字节在文件里找得到，notepad 里找不到），所以拿
+          # 最大那帧的字节在产物 exe 里搜。脚本本体只跑 5.1（System.Drawing），这里显式起一颗。
+          $exe = Join-Path $stage 'lyric_music.exe'
+          if (-not (Test-Path $exe)) { throw "runner exe missing: $exe" }
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File tool/windows/make_icon.ps1 -VerifyExe $exe
+          if ($LASTEXITCODE -ne 0) { throw "exe 里没找到我们的图标帧（powershell 退出码 $LASTEXITCODE）" }
+
           # 干净机器不一定装了 VC++ 运行库；runner 上的 VS 带着可再发行版本，抄三个
           # DLL 进去就是「拷走双击能跑」。找不到就跳过，不让整个构建失败。
           $crt = Get-ChildItem -Path 'C:\Program Files*\Microsoft Visual Studio' -Recurse -Filter 'vcruntime140.dll' -ErrorAction SilentlyContinue |
@@ -108,9 +134,12 @@ jobs:
         # 名解成「--windows-x64」的。理由全写在这条注释里（YAML 自己按 UTF-8 解析，不经
         # PowerShell 的手），脚本正文只留 ASCII。
         #
-        # Icon: built here from the Android master PNG instead of committing an .ico.
-        # The logo changed three times around 0.8.32-0.8.34, and a committed binary is
-        # exactly what the next logo change forgets to regenerate.
+        # Icon: tool/windows/make_icon.ps1 builds it from the Android master PNG instead
+        # of committing an .ico. The logo changed three times around 0.8.32-0.8.34, and a
+        # committed binary is exactly what the next logo change forgets to regenerate.
+        # The same script, run before the build, drops that identical .ico into
+        # windows/runner/resources/app_icon.ico -- which is where the taskbar icon comes
+        # from -- so launcher and app window can no longer disagree.
         # Payload: the portable zip is *appended* to the launcher exe, so the
         # deliverable stays one file and the zip remains a complete archive. Because the
         # appended blob keeps its own central-directory offsets, ZipFile.OpenRead on the
@@ -124,49 +153,14 @@ jobs:
 
           $master = 'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png'
           if (-not (Test-Path $master)) { throw "icon master missing: $master" }
-          Add-Type -AssemblyName System.Drawing
-          $srcImg = [System.Drawing.Image]::FromFile((Resolve-Path $master).Path)
-          $sizes = @(16, 24, 32, 48, 64, 96, 128, 192)
-          $blobs = @()
-          foreach ($s in $sizes) {
-            $bmp = New-Object System.Drawing.Bitmap $s, $s
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-            $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-            $g.DrawImage($srcImg, 0, 0, $s, $s)
-            $g.Dispose()
-            $ms = New-Object System.IO.MemoryStream
-            $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-            $bmp.Dispose()
-            $blobs += , $ms.ToArray()
-            $ms.Dispose()
-          }
-          $srcImg.Dispose()
-
-          # PNG frames inside an ICO container (Vista and later desktops read it).
-          # Width/height bytes: 0 means 256, so anything below that must be literal --
-          # writing 0 for a 192 frame tells the desktop it is 256x256 and it resamples
-          # the wrong thing.
+          # One script for both icons: this is the same tool/windows/make_icon.ps1 that
+          # replaced windows/runner/resources/app_icon.ico before the build, so the
+          # launcher exe and the app window carry the identical frames. Regenerating here
+          # instead of reusing the earlier file keeps this step dependency-free; the bytes
+          # come out the same from the same master PNG.
           $ico = Join-Path $env:RUNNER_TEMP 'songbox.ico'
-          $ms2 = New-Object System.IO.MemoryStream
-          $bw = New-Object System.IO.BinaryWriter($ms2)
-          $bw.Write([UInt16]0); $bw.Write([UInt16]1); $bw.Write([UInt16]$sizes.Count)
-          $off = 6 + (16 * $sizes.Count)
-          for ($i = 0; $i -lt $sizes.Count; $i++) {
-            $s = $sizes[$i]
-            $b = $blobs[$i]
-            $w = $(if ($s -ge 256) { 0 } else { $s })
-            $bw.Write([Byte]$w); $bw.Write([Byte]$w)
-            $bw.Write([Byte]0); $bw.Write([Byte]0)
-            $bw.Write([UInt16]1); $bw.Write([UInt16]32)
-            $bw.Write([UInt32]$b.Length); $bw.Write([UInt32]$off)
-            $off += $b.Length
-          }
-          foreach ($b in $blobs) { $bw.Write($b) }
-          $bw.Flush()
-          [System.IO.File]::WriteAllBytes($ico, $ms2.ToArray())
-          $bw.Dispose(); $ms2.Dispose()
-          "icon: $((Get-Item $ico).Length) bytes"
+          & 'tool/windows/make_icon.ps1' -Master $master -Ico $ico
+          if (-not (Test-Path $ico)) { throw "no icon after make_icon.ps1: $ico" }
 
           # Same rule as the window title in main.cpp: the launcher source stays ASCII and
           # spells its Chinese with \u escapes, because csc also decodes BOM-less files

@@ -19,6 +19,7 @@ import '../../music_sdk/wy_search.dart';
 import '../../util/app_log.dart';
 import '../../util/humanize.dart';
 import '../../util/memo.dart';
+import '../../util/roster.dart';
 
 /// Built-in music library: search / ranks / sheets.
 ///
@@ -163,6 +164,14 @@ class BuiltinLibrary {
   Future<List<ArtistInfo>> topArtists({int page = 1, int limit = 12}) =>
       _catalog.run('top-artists-$page-$limit',
           () => WyCatalog.topArtists(page: page, limit: limit));
+
+  /// 明星名单的一格。[letter] 是界面上的字母（`A`–`Z`，`rosterOther` 那一格是「其它」）。
+  /// 一格只有 100 位、没有下一页（窗口规矩在 [WyCatalog.artistsByLetter]），
+  /// 所以键到格子为止就够；砸了的那格 Memo 不记，界面上「再拉一遍」还能真打一次。
+  Future<List<ArtistInfo>> rosterBucket(String letter) => _catalog.run(
+        'artist-list-$letter',
+        () => WyCatalog.artistsByLetter(rosterInitialCode(letter)),
+      );
 
   /// 新歌速递：接口一次给满 100 首、不认 offset，所以只有一个键，
   /// 「换一批」由界面在这 100 首里切窗口。
