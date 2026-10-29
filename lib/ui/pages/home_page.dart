@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -249,7 +251,7 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
           if (_loading && _ranks.isEmpty && _sheets.isEmpty)
             const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(60), child: Center(child: CircularProgressIndicator())))
           else ...[
-            if (banner.isNotEmpty) SliverToBoxAdapter(child: _Banner(sheets: banner, onTap: _openSheet)),
+            if (banner.isNotEmpty) SliverToBoxAdapter(child: HomeBanner(sheets: banner, onTap: _openSheet)),
             if (_newSongs.isNotEmpty) ...[
               const SliverToBoxAdapter(child: SectionHeader('推荐新歌曲')),
               SliverToBoxAdapter(child: _SongCarousel(songs: _newSongs, onTap: _play)),
@@ -263,16 +265,18 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
                 child: SizedBox(
                   // 封面 108 + 两行标题 + 一行播放量，留够余量，窄屏机上不会溢出报错。
                   height: 165,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    itemCount: recommend.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 12),
-                    itemBuilder: (context, i) => GestureDetector(
-                      onTap: () => _openSheet(recommend[i]),
-                      // 长按即收藏，和发现页的歌单卡一致。
-                      onLongPress: () => toggleSheetFavorite(context, recommend[i]),
-                      child: CoverCard(sheet: recommend[i]),
+                  child: MouseDragScroll(
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: recommend.length,
+                      separatorBuilder: (_, _) => const SizedBox(width: 12),
+                      itemBuilder: (context, i) => GestureDetector(
+                        onTap: () => _openSheet(recommend[i]),
+                        // 长按即收藏，和发现页的歌单卡一致。
+                        onLongPress: () => toggleSheetFavorite(context, recommend[i]),
+                        child: CoverCard(sheet: recommend[i]),
+                      ),
                     ),
                   ),
                 ),
@@ -306,16 +310,27 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
   }
 }
 
-class _Banner extends StatefulWidget {
+/// 首页顶部那排轮播卡。整张卡认点击（进歌单）、长按收藏；桌面版还要能拖、
+/// 能点下面的指示点、能按左右箭头。
+///
+/// 桌面版原来这三样全不通：Flutter 默认不把鼠标算进 scrollable 的拖拽设备
+/// （`ScrollBehavior.dragDevices`），滚轮又只喂给自己那一根轴，所以横向轮播
+/// 在 Windows 上一步都挪不动；指示点更是只画了个色块、没接命中。
+class HomeBanner extends StatefulWidget {
   final List<SheetInfo> sheets;
   final ValueChanged<SheetInfo> onTap;
-  const _Banner({required this.sheets, required this.onTap});
+
+  /// 左右那对箭头只在桌面版出现：手机上这一格本来就窄，再压两个圆钮进去，
+  /// 卡上的字就没地方放了。单测把它显式打开，免得换台机器跑就测不到这条。
+  final bool arrows;
+  HomeBanner({super.key, required this.sheets, required this.onTap, bool? arrows})
+      : arrows = arrows ?? Platform.isWindows;
 
   @override
-  State<_Banner> createState() => _BannerState();
+  State<HomeBanner> createState() => _HomeBannerState();
 }
 
-class _BannerState extends State<_Banner> {
+class _HomeBannerState extends State<HomeBanner> {
   final _ctrl = PageController(viewportFraction: 0.92);
   int _page = 0;
 
@@ -325,53 +340,135 @@ class _BannerState extends State<_Banner> {
     super.dispose();
   }
 
+  /// 指示点和箭头都走这一条：越界的先挡掉，不然 PageView 会抛。
+  void _go(int i) {
+    final last = widget.sheets.length - 1;
+    if (!_ctrl.hasClients || i < 0 || i > last || i == _page) return;
+    setState(() => _page = i);
+    _ctrl.animateToPage(i, duration: const Duration(milliseconds: 260), curve: Curves.easeOut);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final n = widget.sheets.length;
     return Column(
       children: [
         SizedBox(
           height: 130,
-          child: PageView.builder(
-            controller: _ctrl,
-            itemCount: widget.sheets.length,
-            onPageChanged: (i) => setState(() => _page = i),
-            itemBuilder: (context, i) {
-              final s = widget.sheets[i];
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                child: GestureDetector(
-                  onTap: () => widget.onTap(s),
-                  onLongPress: () => toggleSheetFavorite(context, s),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-                    child: CoverTile(
-                        label: s.name,
-                        imageUrl: s.img,
-                        size: double.infinity,
-                        icon: Icons.campaign),
-                  ),
+          child: MouseDragScroll(
+            child: Stack(
+              children: [
+                PageView.builder(
+                  controller: _ctrl,
+                  itemCount: n,
+                  onPageChanged: (i) => setState(() => _page = i),
+                  itemBuilder: (context, i) {
+                    final s = widget.sheets[i];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                      child: GestureDetector(
+                        onTap: () => widget.onTap(s),
+                        onLongPress: () => toggleSheetFavorite(context, s),
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+                            child: CoverTile(
+                                label: s.name,
+                                imageUrl: s.img,
+                                size: double.infinity,
+                                icon: Icons.campaign),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
+                // 拖拽这件事她不一定会去试，箭头是看一眼就知道能动的东西。
+                if (n > 1 && widget.arrows) ...[
+                  Positioned(
+                    left: 12,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: _BannerArrow(
+                          key: const ValueKey('banner-prev'),
+                          icon: Icons.chevron_left,
+                          onTap: _page > 0 ? () => _go(_page - 1) : null),
+                    ),
+                  ),
+                  Positioned(
+                    right: 12,
+                    top: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: _BannerArrow(
+                          key: const ValueKey('banner-next'),
+                          icon: Icons.chevron_right,
+                          onTap: _page < n - 1 ? () => _go(_page + 1) : null),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            for (var i = 0; i < widget.sheets.length; i++)
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                width: i == _page ? 16 : 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  color: i == _page ? AppTheme.primary : AppTheme.textSecondary,
-                  borderRadius: BorderRadius.circular(3),
+            for (var i = 0; i < n; i++)
+              // 命中区撑到 20 多见方：6 个像素的点，鼠标落不准就等于没接。
+              MouseRegion(
+                key: ValueKey('banner-dot-$i'),
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _go(i),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: i == _page ? 16 : 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: i == _page ? AppTheme.primary : AppTheme.textSecondary,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                  ),
                 ),
               ),
           ],
         ),
       ],
+    );
+  }
+}
+
+/// 轮播左右那颗圆箭头：这一头走到头就置灰、不接点击。
+class _BannerArrow extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback? onTap;
+  const _BannerArrow({super.key, required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final on = onTap != null;
+    return MouseRegion(
+      cursor: on ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: on ? .42 : .18),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: 20, color: Colors.white.withValues(alpha: on ? .95 : .45)),
+        ),
+      ),
     );
   }
 }
@@ -386,13 +483,15 @@ class _SongCarousel extends StatelessWidget {
     final items = songs.take(12).toList();
     return SizedBox(
       height: 132,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: items.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 12),
-        itemBuilder: (context, i) =>
-            SongCard(song: items[i], batch: items, onTap: onTap),
+      child: MouseDragScroll(
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: items.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 12),
+          itemBuilder: (context, i) =>
+              SongCard(song: items[i], batch: items, onTap: onTap),
+        ),
       ),
     );
   }

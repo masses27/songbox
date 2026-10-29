@@ -66,6 +66,20 @@ jobs:
         shell: pwsh
         run: flutter pub get
 
+      - name: 版本号对齐
+        shell: pwsh
+        # 「关于」和日志里那句版本号读的是 lib/settings/app_settings.dart 里的常量，
+        # 不是 pubspec。安卓那条 build.sh 会在打包前把这一行按 pubspec 改写，这里没有
+        # 等价步骤，所以 v0.8.43 那次 Actions 编的是常量还写着 0.8.42 的提交——发出去
+        # 的两份桌面产物自报 v0.8.42，跟 Release 标题和 APK 对不上。宁可构建失败，也不
+        # 让产物带着错版本出门。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pub = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)' | Select-Object -First 1).Matches[0].Groups[1].Value.Split('+')[0]
+          $const = (Select-String -Path lib/settings/app_settings.dart -Pattern "static const appVersion = '([^']+)'" | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($const -ne $pub) { throw "appVersion=$const != pubspec=$pub; fix lib/settings/app_settings.dart before shipping" }
+          Write-Host "appVersion = $const"
+
       - name: 构建 release
         shell: pwsh
         run: flutter build windows --release

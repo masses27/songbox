@@ -1,4 +1,5 @@
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -19,6 +20,27 @@ import 'theme.dart';
 /// 来源码给人看的名字。界面上到处是 wy/kw，用户没见过的只会当成乱码。
 /// 对照表在 `sourceName`（models/song.dart），跟取链失败台账共用一份。
 String sourceLabel(String source) => sourceName(source);
+
+/// 让里面这根横向排能用鼠标拖着走。
+///
+/// Flutter 默认不给 scrollable 接鼠标拖拽（`ScrollBehavior.dragDevices` 里没有
+/// `PointerDeviceKind.mouse`，理由是怕抢了文字选择），所以桌面版上竖向列表还能用
+/// 滚轮，横向排是彻底没辙：滚轮只喂给自己那一根轴，横向排拿不到竖向的滚动量。
+/// 首页轮播那格她就是这么判定「这块坏了」的。这里只把鼠标加进横向排的
+/// dragDevices，竖向不动——日志页、体检页里有可选中的文字，加了会选不动。
+class MouseDragScroll extends StatelessWidget {
+  final Widget child;
+  const MouseDragScroll({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final base = ScrollConfiguration.of(context);
+    return ScrollConfiguration(
+      behavior: base.copyWith(dragDevices: {...base.dragDevices, PointerDeviceKind.mouse}),
+      child: child,
+    );
+  }
+}
 
 /// Rounded pill search bar shown at the top of 首页/发现.
 class NetEaseSearchBar extends StatelessWidget {

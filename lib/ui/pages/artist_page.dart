@@ -252,33 +252,35 @@ class _AlbumStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 152,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: albums.length > 30 ? 30 : albums.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 12),
-        itemBuilder: (context, i) {
-          final a = albums[i];
-          return GestureDetector(
-            onTap: () => Navigator.push(
-                context, MaterialPageRoute(builder: (_) => AlbumPage(albumId: a.id, seedName: a.name))),
-            child: SizedBox(
-              width: 106,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  CoverTile(label: '', imageUrl: a.pic, size: 106, icon: Icons.album_outlined),
-                  const SizedBox(height: 4),
-                  Text(a.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-                  Text(a.publishYear,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                ],
+      child: MouseDragScroll(
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: albums.length > 30 ? 30 : albums.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 12),
+          itemBuilder: (context, i) {
+            final a = albums[i];
+            return GestureDetector(
+              onTap: () => Navigator.push(
+                  context, MaterialPageRoute(builder: (_) => AlbumPage(albumId: a.id, seedName: a.name))),
+              child: SizedBox(
+                width: 106,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CoverTile(label: '', imageUrl: a.pic, size: 106, icon: Icons.album_outlined),
+                    const SizedBox(height: 4),
+                    Text(a.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                    Text(a.publishYear,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

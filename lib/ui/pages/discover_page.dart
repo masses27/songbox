@@ -541,12 +541,14 @@ class _StripState<T> extends State<_Strip<T>> {
           if (_items.isNotEmpty)
             SizedBox(
               height: widget.height,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: _items.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 12),
-                itemBuilder: (context, i) => widget.tile(context, _items[i], _items),
+              child: MouseDragScroll(
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: _items.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 12),
+                  itemBuilder: (context, i) => widget.tile(context, _items[i], _items),
+                ),
               ),
             ),
         ],
@@ -823,23 +825,25 @@ class _SheetCategoriesState extends State<_SheetCategories> {
             onAction: _swapping || _sheets.isEmpty ? null : _swap),
         SizedBox(
           height: 34,
-          child: ListView.builder(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: quick.length + 1,
-            itemBuilder: (context, i) {
-              if (i == quick.length) {
+          child: MouseDragScroll(
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: quick.length + 1,
+              itemBuilder: (context, i) {
+                if (i == quick.length) {
+                  return Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: _ExpandChip(open: _catsOpen, onTap: () => setState(() => _catsOpen = !_catsOpen)),
+                  );
+                }
+                final c = quick[i];
                 return Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: _ExpandChip(open: _catsOpen, onTap: () => setState(() => _catsOpen = !_catsOpen)),
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _CatChip(name: c, active: c == _category, onTap: () => _pick(c)),
                 );
-              }
-              final c = quick[i];
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: _CatChip(name: c, active: c == _category, onTap: () => _pick(c)),
-              );
-            },
+              },
+            ),
           ),
         ),
         if (_catsOpen) _CategoryPanel(current: _category, onPick: _pick),
@@ -1006,20 +1010,22 @@ class _RankStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: _side,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: ranks.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 10),
-        itemBuilder: (context, i) => InkWell(
-          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-          onTap: () => onTap(ranks[i]),
-          child: CoverTile(
-            label: ranks[i].name,
-            seedText: ranks[i].name,
-            imageUrl: ranks[i].img,
-            size: _side,
-            icon: Icons.leaderboard,
+      child: MouseDragScroll(
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          itemCount: ranks.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 10),
+          itemBuilder: (context, i) => InkWell(
+            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+            onTap: () => onTap(ranks[i]),
+            child: CoverTile(
+              label: ranks[i].name,
+              seedText: ranks[i].name,
+              imageUrl: ranks[i].img,
+              size: _side,
+              icon: Icons.leaderboard,
+            ),
           ),
         ),
       ),
