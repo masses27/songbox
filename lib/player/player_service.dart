@@ -1764,7 +1764,12 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
     if (from > 0.01 && _ap.playing) {
       for (var i = 1; i <= 5; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
-        if (gen != _sleepGen) return;
+        if (gen != _sleepGen) {
+          // 淡出走到大半她改了定时或取消：这一轮不是我那轮了，但音量已经压下去，
+          // 不还回去她刚点开的这一首就是闷的。
+          unawaited(_ap.setVolume(from));
+          return;
+        }
         await _ap.setVolume((from * (5 - i) / 5).clamp(0.0, 1.0));
       }
     }
