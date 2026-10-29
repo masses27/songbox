@@ -24,7 +24,9 @@
 
 弹层（对话框、底部面板、菜单、提示条）走主题里的半透明底（92% 不透明度）并各限宽度——对话框 420、底部面板 560、提示条 480，桌面大屏不会铺满一屏；播放页无论设置是深是浅都用深色一套局部主题，黑底上不再跳出一块白面板。播放条上的循环模式从「点一下换一种」改成直接摊开四个选项（列表循环/单曲循环/随机播放/播完停止），选完不动当前曲目也不重新起播，窄屏和大字号下自动换成两行、按钮仍是 48×48。
 
-这一轮（0.8.42）动的是十处手感，都是屏幕上看得见、点得到的：
+这一轮（0.8.43）动的是两处：一首按字母翻的明星名单（下面单开一节讲它的数据是从哪来的、为什么只有一格 100 位），和桌面版任务栏那颗图标——以前窗口一开起来就换成 Flutter 自己的标，现在两边同源（根因在「Windows 免安装版」那一节）。
+
+上一轮（0.8.42）动的是十处手感，都是屏幕上看得见、点得到的：
 
 - **刷新失败不再把屏上那批抹掉。** 发现页下拉一次，网络抖一下原来会把她已经在看的一排封面换成一句报错。现在留着上一批，只在下面补一行「这批是上次那批：…」/「这批歌单是上次那批：…」，重试就在旁边；真的一张都没拉到才说「没拉到」。三块横向板块（`_Strip`）、歌单分类（`_SheetCategories`）、榜单那一格三条路都改了，判据同一个：屏上有东西就不能说「没有」。
 - **「找其他版本」分清「没搜动」和「真没有」。** `TwinSearch` 除了曲目还带回 `failed` 和 `asked`，界面据此分三句说：一家都没问出去时是「这几家这次都没答话：B 站、酷狗」+「再搜一遍」，问出去几家但都没货才让她换关键词——搜都没搜成，换个词再撞一遍没有意义。
@@ -115,7 +117,7 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 
 构建走 GitHub Actions：仓库的 Actions 页 → `windows-portable` → Run workflow（`.github/workflows/windows-portable.yml`，只有 `workflow_dispatch`，一次出两份产物：`songbox-<version>-windows-x64-portable.zip` 和 `songbox-<version>-windows-x64-single.exe`）。
 
-产物发在对应版本的 Release 上（tag 是 `v<版本号>`，文件名一律 ASCII —— Release 的直链会把中文名削掉）。桌面当前以 v0.8.42 那两颗为准（v0.8.39 只发过 POPO，没建 Release；v0.8.41 与 v0.8.38 那两颗仍在各自的 Release 上，v0.8.38 是上面那个 `const []` 的坑修好之后的第一版）。已经装过桌面版的直接覆盖成新 exe。仓库是私有的，`github.com/…/releases/download/…` 那条直链不带登录态会回 `Not Found`，脚本取产物走 API（`GET /repos/masses27/songbox/releases/assets/<id>` 配 `Accept: application/octet-stream`）。上传同理不能用 `api.github.com` 那条路径（404），要用创建 Release 回包里的 `upload_url` —— 它指向 `uploads.github.com`，尾巴上挂着 `{?name,label}` 模板，得自己去掉模板占位、拼上 `?name=<ascii名>` 再 POST。
+产物发在对应版本的 Release 上（tag 是 `v<版本号>`，文件名一律 ASCII —— Release 的直链会把中文名削掉）。桌面当前以 v0.8.42 那两颗为准（v0.8.43 那两颗这一轮只走 POPO、没建 Release，跟 v0.8.39 一样；v0.8.41 与 v0.8.38 那两颗仍在各自的 Release 上，v0.8.38 是上面那个 `const []` 的坑修好之后的第一版）。已经装过桌面版的直接覆盖成新 exe。仓库是私有的，`github.com/…/releases/download/…` 那条直链不带登录态会回 `Not Found`，脚本取产物走 API（`GET /repos/masses27/songbox/releases/assets/<id>` 配 `Accept: application/octet-stream`）。上传同理不能用 `api.github.com` 那条路径（404），要用创建 Release 回包里的 `upload_url` —— 它指向 `uploads.github.com`，尾巴上挂着 `{?name,label}` 模板，得自己去掉模板占位、拼上 `?name=<ascii名>` 再 POST。
 
 必须在 Actions 上编，本机编不了：`flutter build windows` 要能建符号链接，而这台机的账号既没有 `SeCreateSymbolicLinkPrivilege`，开发者模式也开不了（要写 `HKLM\...\AppModelUnlock`，得管理员）。runner 上这两条现成。
 
@@ -128,14 +130,14 @@ debug 版不收缩代码也不收缩资源，所以这两种坏只在装进手�
 - 数据落在 exe 旁边的 `data/`（`lib/util/app_paths.dart`）。桌面版 `getApplicationDocumentsDirectory()` 返回的是用户的「文档」根目录，不收敛就会把 `settings.json`、`library/`、`logs/` 全撒进她的文档里；`data/` 跟着包走，U 盘拷一份就是完整一套。旁边写不动时才退回应用支持目录。安卓落点不变。注意这个 `data/` 跟 Flutter 自己那个 `data/`（`app.so`、`flutter_assets`、`icudtl.dat`）是同一个目录，我们的 `logs/`、`library/` 就并排躺在引擎资源旁边——能用，但不体面，日后想分开就改 `AppPaths._desktopRoot()` 那一个名字。
 - 安卓专属那几样在桌面上直接绕开，不去试：系统均衡器（`AndroidEqualizer` 走 MethodChannel）、下拉菜单那张播放卡的整条自检与接桥。均衡器那一页里「这台设备没有提供系统均衡器」那句就是给桌面版的。
 - 已知短处：桌面上也没有媒体会话，切歌只能回应用里点。
-- 图标验到哪一步了：本机验的是脚本本身 —— 出来的 ICO 跟原来 workflow 内联那段逐字节相同（202149 字节 / 八帧，搬代码没搬出别的像素），覆盖那一步会把「壳子里原来那颗」和「写进去的字节」都印出来对得上，拿最大那帧的字节在 exe 里找得到才算进得了包（拿 `csc -win32icon` 现编一颗试验 exe 正反两向都验过：notepad 里找不到、我们自己那颗找得到），并且 `PrivateExtractIcons` 在这台机上对 16/32/48/192 四档都能从那颗 exe 里取出图标 —— 任务栏要的就是 16 这一档。没验到的是 rc.exe 那一步（本机编不了 Windows），所以「组装免安装包」那步把同一条断言钉在产物 exe 上：盖错位置、或者编不进去，构建直接失败，不会默默出一颗带 Flutter 标的包。
+- 图标验到哪一步了：脚本本身先验——出来的 ICO 跟原来 workflow 内联那段逐字节相同（202149 字节 / 八帧，搬代码没搬出别的像素），覆盖那一步会把「壳子里原来那颗」和「写进去的字节」都印出来对得上，拿最大那帧的字节在 exe 里找得到才算进得了包（拿 `csc -win32icon` 现编一颗试验 exe 正反两向都验过：notepad 里找不到、我们自己那颗找得到）。rc.exe 那一步本机编不了，所以「组装免安装包」那步把同一条断言钉在产物 exe 上，0.8.43 那次（run 13）两行日志都落了地：`runner icon: replaced Flutter template icon (33772 bytes) with ours (202149 bytes)` 说明盖的位置就是模板那颗占着的位置，`exe icon verified: lyric_music.exe embeds the 99053-byte frame` 说明 rc 把 192 那一帧原样搬进了资源。最后本机拿 `PrivateExtractIcons` 从 zip 里那颗 `lyric_music.exe` 上取 16/32/48/192 四档：四档都取得出来，192 那一档整张的平均色 74,105,102 与母图 `ic_launcher.png` 量出来的同一个数，而同一把尺子量 0.8.42 那颗（`%LOCALAPPDATA%\听歌小窝\lyric_music.exe`）是 71,177,230——正是 Flutter 那片天蓝。没勾的只剩她眼睛那一格：任务栏上实际看到的是哪张（那条图标缓存的注意在上一节）。
 - 验到哪一步了：0.8.35 那个包在本机起得来、界面和封面都正常，`libmpv-2.dll` 确实加载进了进程，旧版那句 `MissingPluginException(… just_audio.methods)` 不再出现，数据也确实落在 `data/` 而没碰「文档」。播放也真点过了：`data/logs/play-2026-10-27.log` 里三行 `[播]`（一首 B 站 192k、两首提前备好的 320k），队列自己往下走，`library/play_stats.json` 记到「阿刁」听到 371 秒（全长 374）并算完播、「米店」336 秒算完播——那是播放位置一路推进出来的数，不是点一下就能伪造的。`[崩]` 一条没有。剩最后一格没勾：耳机里到底有没有声，只有她耳朵能判。
 
 ## Windows 单文件版
 
-zip 那份要用，就得一直留着那个文件夹：她桌面要么堆一层目录，要么放个快捷方式指进去。单文件那份把这些都省了——桌面永远只有 `听歌小窝.exe` 一颗（0.8.42 实测 20.2MB），双击就完事。
+zip 那份要用，就得一直留着那个文件夹：她桌面要么堆一层目录，要么放个快捷方式指进去。单文件那份把这些都省了——桌面永远只有 `听歌小窝.exe` 一颗（0.8.43 实测 20.4MB），双击就完事。
 
-做法是启动器 + 尾巴：`tool/win_single/launcher.cs` 用 runner 上现成的 `csc.exe`（.NET Framework 4.8 自带，不额外装东西）编成一颗 211KB 的 exe，再把 zip 那一份整个接在它尾巴上。PE 只看头部那些节，尾巴上的字节当资源多余的部分忽略，所以这文件既是能跑的程序又是一份完整 zip；启动器按 zip 自己的 EOCD 往回算出尾巴起点（`blobStart = eocd绝对位置 - 中央目录长度 - 中央目录起始偏移`），把 blob 切出来解到 `%LOCALAPPDATA%\听歌小窝\`，再从那儿拉起 `lyric_music.exe`。payload 是 23 个条目（19 个文件 + 4 个目录项，压缩 20.0MB、解出来 45.9MB），第一次解压实测一秒左右；之后版本号和 `songbox-version.txt` 那枚戳记一致就直接跳过解压。（0.8.38 那一份是 38 个条目、压缩 20.6MB、解出来 47.2MB——少的 15 项正是脚本层那一整摊：9 个脚本、`flutter_js_plugin.dll`、`quickjs_c_bridge.dll` 和它们那几个目录项。尾巴是逐字节接上去的：0.8.42 那颗单文件 21,226,647 = 启动器 215,552 + 免安装 zip 21,011,095，两颗说的同一件事。）
+做法是启动器 + 尾巴：`tool/win_single/launcher.cs` 用 runner 上现成的 `csc.exe`（.NET Framework 4.8 自带，不额外装东西）编成一颗 211KB 的 exe，再把 zip 那一份整个接在它尾巴上。PE 只看头部那些节，尾巴上的字节当资源多余的部分忽略，所以这文件既是能跑的程序又是一份完整 zip；启动器按 zip 自己的 EOCD 往回算出尾巴起点（`blobStart = eocd绝对位置 - 中央目录长度 - 中央目录起始偏移`），把 blob 切出来解到 `%LOCALAPPDATA%\听歌小窝\`，再从那儿拉起 `lyric_music.exe`。payload 是 23 个条目（19 个文件 + 4 个目录项，压缩 20.2MB、解出来 46.1MB），第一次解压实测一秒左右；之后版本号和 `songbox-version.txt` 那枚戳记一致就直接跳过解压。（0.8.38 那一份是 38 个条目、压缩 20.6MB、解出来 47.2MB——少的 15 项正是脚本层那一整摊：9 个脚本、`flutter_js_plugin.dll`、`quickjs_c_bridge.dll` 和它们那几个目录项。尾巴是逐字节接上去的：0.8.43 那颗单文件 21,440,553 = 启动器 215,552 + 免安装 zip 21,225,001，两颗说的同一件事。）
 
 几条写死了的理由：
 
@@ -144,8 +146,8 @@ zip 那份要用，就得一直留着那个文件夹：她桌面要么堆一层�
 - 已经开着的时候不硬来：戳记是最新但进程在跑，就把那个窗口拉回前台，不再开第二个；戳记是旧的而进程在跑，直接提示「先把它关掉再点一次」退出——半覆盖正在运行的程序文件是版本混着用的来路。
 - 图标走 `-win32icon:`，用和安卓同源那张 `mipmap-xxxhdpi/ic_launcher.png` 现拼的 ICO（16/24/32/48/64/96/128/192 八帧，202149 字节），编进启动器的资源里，桌面那颗 exe、资源管理器预览都是它。为什么不提交现成的 `.ico`：logo 在 0.8.32-0.8.34 连着换了三次，二进制文件正是下次换标会忘记重生的那种。这一张现在由 `tool/windows/make_icon.ps1` 生成，同一份字节还拿去盖 `windows/runner/resources/app_icon.ico`（见上一节），所以里面那颗 `lyric_music.exe` 也不再是 Flutter 模板的标了 —— 任务栏那颗是从 exe 自己的资源里读的，以前只有启动器对得上、窗口一开就换人，现在两边同源。
 - 三份都实测 `Get-AuthenticodeSignature = NotSigned`（runner 上没有证书），第一次运行 Windows 拦一下属正常：弹的那张「已保护你的电脑」要按「更多信息」才露出「仍要运行」。这跟单文件版没关系，zip 里那颗 exe 一样。
-- 单文件这份本机验到的是：桌面双击 → 进程起在 `%LOCALAPPDATA%\听歌小窝\lyric_music.exe`（不是桌面那颗），窗口标题 `[听歌小窝]`，`libmpv-2.dll` 确实加载，日志接着往 `data\logs\` 里写 `[起]`；已经在跑的时候再点一次，进程数不变，只把窗口拉回前台，也不重解 —— 前几条是 0.8.36 那两颗点出来的，「不重解」这一条 0.8.38 用 `/dir:` 指到刚解压好的那份又走了一遍，启动器日志里就是那句 `stamp matches, no unpack`。尾巴接的就是那份 zip 本体：run 8 的产物 21,849,150 = 启动器 215,552 + 免安装包 21,633,598，尾巴上那 21,633,598 个字节跟 zip 本体逐字节相同（两边 SHA256 一样）、起点正落在 `PK` 上，启动器自己那行日志印出来的 `blobStart` 也是 215552；包体里 31 个文件、`lyric_music.exe` 和 `libmpv-2.dll` 都在。run 6 那次还逐个 SHA256 比对过解出来的文件与 zip 里的条目，0 处不一致。播放那一格 0.8.38 补上了：让程序在一个 `data/library/` 里一个文件都没有的目录里冷启动（就是她另一台机器上「一首都没放过」的那个状态），点「播放已加载 50 首」，日志里 `17:47:56 [播] 「画」开始播放（第 0:00，现取 192k）` 之后 `[链]`、`[崩]`、`[跳]` 一条都没有，`recent.json` 当场落盘 —— 0.8.36 那份卡的正是这一步的 `Cannot remove from an unmodifiable list`。剩最后一格没勾的还是耳机里到底有没有声，只有她耳朵能判。
-- 启动器补了版本资源（五条 assembly attribute，两个版本号都取那句被 workflow 改写的 `Version`）：run 8 的 exe 属性→详细信息实测 `FileVersion=0.8.38`、`ProductVersion=0.8.38`、产品名和说明都是「听歌小窝」，不再是一颗 20MB 的无名 blob。这一句能对上，靠的是 workflow 改成按正则匹配 `Version` 行本身 —— 以前它钉死上一版的字面量，一旦 `launcher.cs` 里的默认值已经等于要编的那一版，改写就静默空转，下一版会拿上一版的戳记出货。里面那颗 `lyric_music.exe` 的版本信息带的还是 Flutter 模板那套（`FileDescription=lyric_music`、`FileVersion=0.8.38+51`），那个壳子是 `flutter create` 现造的，不去动它 —— 动它的只有图标那一样（构建前盖进 `resources\app_icon.ico`，见上一节）。
+- 单文件这份本机验到的是：桌面双击 → 进程起在 `%LOCALAPPDATA%\听歌小窝\lyric_music.exe`（不是桌面那颗），窗口标题 `[听歌小窝]`，`libmpv-2.dll` 确实加载，日志接着往 `data\logs\` 里写 `[起]`；已经在跑的时候再点一次，进程数不变，只把窗口拉回前台，也不重解 —— 前几条是 0.8.36 那两颗点出来的，「不重解」这一条 0.8.38 用 `/dir:` 指到刚解压好的那份又走了一遍，启动器日志里就是那句 `stamp matches, no unpack`。尾巴接的就是那份 zip 本体：run 13（0.8.43）的产物 21,440,553 = 启动器 215,552 + 免安装包 21,225,001，本机按 EOCD 往回算出的 `blobStart` 也是 215552、workflow 里那条「blobStart 必须等于启动器字节数」的断言同样过了，尾巴上那 21,225,001 个字节跟 zip 本体 SHA256 一致、起点正落在 `PK\x03\x04` 上；包体里 19 个文件、`lyric_music.exe` 和 `libmpv-2.dll` 和 VC++ 那三颗都在，没有一个音源脚本文件名。（run 8 那次还逐个 SHA256 比对过解出来的文件与 zip 里的条目，0 处不一致。）播放那一格 0.8.38 补上了：让程序在一个 `data/library/` 里一个文件都没有的目录里冷启动（就是她另一台机器上「一首都没放过」的那个状态），点「播放已加载 50 首」，日志里 `17:47:56 [播] 「画」开始播放（第 0:00，现取 192k）` 之后 `[链]`、`[崩]`、`[跳]` 一条都没有，`recent.json` 当场落盘 —— 0.8.36 那份卡的正是这一步的 `Cannot remove from an unmodifiable list`。剩最后一格没勾的还是耳机里到底有没有声，只有她耳朵能判。
+- 启动器补了版本资源（五条 assembly attribute，两个版本号都取那句被 workflow 改写的 `Version`）：run 13（0.8.43）的 exe 属性→详细信息实测 `FileVersion=0.8.43`、`ProductVersion=0.8.43`、产品名和说明都是「听歌小窝」，不再是一颗 20MB 的无名 blob（run 8 起每一版都实测过同一组数）。这一句能对上，靠的是 workflow 改成按正则匹配 `Version` 行本身 —— 以前它钉死上一版的字面量，一旦 `launcher.cs` 里的默认值已经等于要编的那一版，改写就静默空转，下一版会拿上一版的戳记出货。里面那颗 `lyric_music.exe` 的版本信息带的还是 Flutter 模板那套（`FileDescription=lyric_music`、`FileVersion=0.8.43+56`——数字跟着 pubspec 走，壳子的名字不跟），那个壳子是 `flutter create` 现造的，不去动它 —— 动它的只有图标那一样（构建前盖进 `resources\app_icon.ico`，见上一节）。
 
 启动器源码里那三行 `\u` 转义的汉字不是凑字数：`csc` 读没 BOM 的文件按各机 ANSI 代码页解码，源码里塞汉字哪天就编成乱码——和 `main.cpp` 的窗口标题同一个理由。调试开关 `/dir:<路径>`（解到别处）和 `/check`（只解压不启动）、`/log:<路径>`（winexe 没控制台，话只能写文件）留给 CI 和本机复现用，她双击时一个都不会碰到。
 
@@ -153,7 +155,7 @@ zip 那份要用，就得一直留着那个文件夹：她桌面要么堆一层�
 
 ```bash
 ~/dev/flutter/bin/flutter analyze   # 干净，0 条
-~/dev/flutter/bin/flutter test      # 253 条，全离线
+~/dev/flutter/bin/flutter test      # 273 条，全离线
 ```
 
 联网探测脚本放在 `tool/`，按需单独跑；`research/` 装的是逐条打各家接口留下的抓取件和探测输出（当年那套第三方音源脚本、这一轮发现页那几块都探过），不进仓库——它们只对质「这个结论当时是怎么量出来的」，跟着项目发出去没意义。
