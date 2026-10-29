@@ -122,6 +122,8 @@ class _RankDetailPageState extends State<RankDetailPage> {
       appBar: AppBar(
         title: Text(widget.title),
         actions: [
+          // 桌面上这一颗是这一页唯一的刷新入口：鼠标拖不动下拉刷新。
+          DesktopRefreshButton(onRefresh: () => _load(refresh: true), busy: _loading),
           if (_songs.isNotEmpty) ...[
             IconButton(
               tooltip: '把这一榜收进收藏',

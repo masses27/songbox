@@ -86,7 +86,14 @@ class DownloadManager extends ChangeNotifier {
               notifyListeners();
             }
           });
-      await for (final chunk in resp.data!.stream.timeout(_stallTimeout)) {
+      // `data!` 在流式响应里不是 guaranteed 非空：预取那一路按 null 收的，这里同样
+      // 得收住 —— 空一下是 `Null check operator` 那句天书，而不是「没取到数据」。
+      final body = resp.data;
+      if (body == null) {
+        task.error = '没取到数据，换一个音质或稍后再试';
+        return;
+      }
+      await for (final chunk in body.stream.timeout(_stallTimeout)) {
         sink.add(chunk);
       }
       await sink.close();
@@ -118,7 +125,7 @@ class DownloadManager extends ChangeNotifier {
         task.error = humanizeError(e);
       }
     } on FileSystemException {
-      task.error = '手机存储空间不足，清理后再下载';
+      task.error = '这台机器存储空间不足，清理后再下载';
     } catch (e) {
       task.error = humanizeError(e);
     } finally {

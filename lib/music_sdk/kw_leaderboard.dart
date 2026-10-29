@@ -1,9 +1,8 @@
-import 'dart:convert';
-
 import 'package:dio/dio.dart';
 
 import '../models/results.dart';
 import '../models/song.dart';
+import '../util/json_body.dart';
 import 'kw_search.dart';
 
 /// Kuwo (kw) leaderboards — simplified port of lx-music-mobile's
@@ -36,9 +35,9 @@ class KwLeaderboard {
       receiveTimeout: const Duration(seconds: 15),
       responseType: ResponseType.plain,
     )).get<dynamic>(url);
-    final body = resp.data;
-    if (body is! String) throw Exception('kw rank: unexpected response');
-    final decoded = jsonDecode(body) as Map<String, dynamic>;
+    final raw = resp.data;
+    final decoded = decodeBody(raw is String ? raw : '', status: resp.statusCode, label: '酷我榜单');
+    if (decoded is! Map) throw Exception('酷我榜单回的不是一个对象（HTTP ${resp.statusCode}）');
     final rawList = (decoded['musiclist'] as List?) ?? const [];
     final list = <Song>[];
     for (final raw in rawList) {

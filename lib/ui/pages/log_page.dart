@@ -29,7 +29,7 @@ class _LogPageState extends State<LogPage> {
   }
 
   Future<void> _load() async {
-    final t = await AppLog.tail(lines: 800);
+    final t = await AppLog.tail();
     if (!mounted) return;
     setState(() {
       _text = t;
@@ -41,7 +41,7 @@ class _LogPageState extends State<LogPage> {
     final all = await AppLog.exportText();
     await Clipboard.setData(ClipboardData(text: all));
     if (!mounted) return;
-    toast(context, '已复制整段日志，粘到 POPO 发我就行');
+    toast(context, '已复制最近 ${AppLog.tailLines} 行，粘到 POPO 发我就行');
   }
 
   @override
@@ -96,7 +96,7 @@ class _LogPageState extends State<LogPage> {
                       // 没内容就把按钮关掉，比弹一条没用的提示明白得多。
                       onPressed: _text.isEmpty ? null : _copy,
                       icon: const Icon(Icons.copy_all, size: 18),
-                      label: const Text('复制全部发我'),
+                      label: Text('复制最近 ${AppLog.tailLines} 行发我'),
                       style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
                     ),
                   ),

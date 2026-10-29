@@ -87,6 +87,9 @@ class _DailyPageState extends State<DailyPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('今日私荐'),
+        // 桌面上这一颗是这一页唯一的刷新入口：鼠标拖不动下拉刷新，
+        // 而空页那句「下拉再试一次」在电脑上根本做不到。
+        actions: [DesktopRefreshButton(onRefresh: () => _load(refresh: true), busy: _loading)],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(30),
           child: Padding(

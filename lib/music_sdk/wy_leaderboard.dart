@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import '../models/results.dart';
 import '../models/song.dart';
+import '../util/json_body.dart';
 
 /// NetEase (wy) official toplists: board list + board songs.
 class WyLeaderboard {
@@ -18,10 +19,19 @@ class WyLeaderboard {
     },
   ));
 
+  /// 榜单那三个端点原先都是直接 `jsonDecode(resp.data as String)`：空 body 冒出来的是
+  /// `Unexpected end of input`，回一坨 HTML 冒出来的是类型转换报错，屏幕上看不出卡在
+  /// 哪个接口、服务器到底答了没。归因交给 decodeBody，它那句本来就带接口名和 HTTP 码。
+  static Map _ask(Response<dynamic> resp, String label) {
+    final raw = resp.data;
+    final j = decodeBody(raw is String ? raw : '', status: resp.statusCode, label: label);
+    if (j is! Map) throw Exception('$label 回的不是一个对象（HTTP ${resp.statusCode}）');
+    return j;
+  }
+
   Future<List<RankInfo>> get list async {
     final resp = await _dio.get('https://music.163.com/api/toplist?csrf_token=');
-    final j = jsonDecode(resp.data as String);
-    final arr = ((j as Map)['list']) as List? ?? const [];
+    final arr = (_ask(resp, '网易云榜单列表')['list']) as List? ?? const [];
     return arr.map((e) {
       final m = e as Map;
       final pic = m['coverImgUrl']?.toString() ?? '';
@@ -49,8 +59,8 @@ class WyLeaderboard {
       'https://music.163.com/api/v3/playlist/detail?id=$rankId&n=1&csrf_token=',
       data: 'id=$rankId',
     );
-    final j = jsonDecode(resp.data as String);
-    final pl = (j as Map)['playlist'];
+    final j = _ask(resp, '网易云榜单');
+    final pl = j['playlist'];
     final trackIds = (pl is Map ? pl['trackIds'] : null) as List? ?? const [];
     final all = trackIds.map((t) => '${(t as Map)['id']}').toList();
     if (all.isEmpty) return SearchResult(0, 1, const []);
@@ -71,8 +81,7 @@ class WyLeaderboard {
       'https://music.163.com/api/v3/song/detail?csrf_token=',
       data: 'c=${Uri.encodeQueryComponent(jsonEncode(c))}&ids=[${ids.join(',')}]',
     );
-    final j = jsonDecode(resp.data as String);
-    final arr = ((j as Map)['songs']) as List? ?? const [];
+    final arr = (_ask(resp, '网易云榜单歌曲')['songs']) as List? ?? const [];
     return arr.map(_one).whereType<Song>().toList();
   }
 

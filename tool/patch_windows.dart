@@ -27,14 +27,64 @@ void patchWindows(Directory project) {
     );
   }
   String read(File file) => file.readAsStringSync().replaceAll('\r\n', '\n');
+  // 标题只写一处：kTitle 由单实例那段声明，窗口名和「把先开的那一个叫到眼前」
+  // 用的 FindWindow 必须是同一个串，所以守卫先垫进去，再换 Create() 的实参。
   final mainText = replaceOnce(
-    read(main),
+    replaceOnce(
+      read(main),
+      '''  // Initialize COM, so that it is available for use in the library and/or
+  // plugins.
+  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);''',
+      r'''  // Initialize COM, so that it is available for use in the library and/or
+  // plugins.
+  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+  // Universal-character-name spelling, not raw Chinese: the runner compiles
+  // without /utf-8, so multi-byte literals in this file would land as mojibake.
+  const wchar_t kTitle[] = L"\u542c\u6b4c\u5c0f\u7a9d";
+  // One instance per install directory: two windows from the same folder each
+  // write their own data/*.json, and whichever quits last overwrites the
+  // other. The mutex is named after this exe's directory, so a copy installed
+  // somewhere else still starts on its own.
+  wchar_t exe_path[MAX_PATH] = {};
+  const DWORD exe_len = ::GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+  if (exe_len > 0 && exe_len < MAX_PATH) {
+    // Hand-written scan for the last separator: <cwchar> is not among the
+    // runner's includes, so wcsrchr would be a build-time surprise.
+    wchar_t* cut = nullptr;
+    for (wchar_t* p = exe_path; *p != L'\0'; ++p) {
+      if (*p == L'\\') {
+        cut = p;
+      }
+    }
+    if (cut != nullptr) {
+      *cut = L'\0';
+      wchar_t mutex_name[3 * MAX_PATH] = {};
+      ::wsprintfW(mutex_name, L"Local\\songbox-%s", exe_path);
+      const HANDLE held = ::CreateMutexW(nullptr, FALSE, mutex_name);
+      if (held != nullptr && ::GetLastError() == ERROR_ALREADY_EXISTS) {
+        // The second copy draws no window of its own: it calls the first one
+        // to the front, else a double click looks like a failed start.
+        const HWND front = ::FindWindowW(L"FLUTTER_RUNNER_WIN32_CLASS", kTitle);
+        if (front != nullptr) {
+          if (::IsIconic(front)) {
+            ::ShowWindow(front, SW_RESTORE);
+          }
+          ::SetForegroundWindow(front);
+        }
+        ::CloseHandle(held);
+        return EXIT_SUCCESS;
+      }
+    }
+  }''',
+      'main.cpp single instance guard',
+    ),
     '''  Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (!window.Create(L"lyric_music", origin, size)) {''',
-    r'''  Win32Window::Point origin(10, 10);
+    '''  Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"\u542c\u6b4c\u5c0f\u7a9d", origin, size)) {''',
+  if (!window.Create(kTitle, origin, size)) {''',
     'main.cpp title and startup size',
   );
   var windowText = replaceOnce(
@@ -154,7 +204,8 @@ void main(List<String> args) {
     patchWindows(
       args.isEmpty ? Directory.current : Directory(args.single).absolute,
     );
-    stdout.writeln('Windows title and adaptive window configuration applied.');
+    stdout.writeln('Windows title, single instance and adaptive window '
+        'configuration applied.');
   } on Object catch (error) {
     stderr.writeln('Windows runner patch failed: $error');
     exitCode = 1;

@@ -357,31 +357,38 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
             IconButton(onPressed: _current.loading ? null : _search, icon: const Icon(Icons.search)),
           ],
         ),
+        // 桌面上鼠标拖不动下拉刷新，这颗是重跑当前这一栏的唯一入口。
+        actions: [DesktopRefreshButton(onRefresh: _refreshTab, busy: _current.loading)],
         bottom: PreferredSize(
           preferredSize: Size.fromHeight(_source == 'wy' ? 80 : 66),
           child: Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                child: Row(
-                  children: [
-                    for (final s in _sources)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text(sourceLabel(s)),
-                          selected: _source == s,
-                          selectedColor: AppTheme.primary.withValues(alpha: .15),
-                          labelStyle: TextStyle(
-                            fontSize: 12,
-                            color: _source == s ? AppTheme.primary : AppTheme.textSecondary,
+                // 窗口拖窄时这排标签加那句「共 N 首」会顶破一行宽度并溢出报错：
+                // 让它横向可滚，界面在窄窗口里也还是完整的一排。
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final s in _sources)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(sourceLabel(s)),
+                            selected: _source == s,
+                            selectedColor: AppTheme.primary.withValues(alpha: .15),
+                            labelStyle: TextStyle(
+                              fontSize: 12,
+                              color: _source == s ? AppTheme.primary : AppTheme.textSecondary,
+                            ),
+                            onSelected: (_) => _pickSource(s),
                           ),
-                          onSelected: (_) => _pickSource(s),
                         ),
-                      ),
-                    if (hasQuery && _current.items.isNotEmpty)
-                      Text(_current.countText, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                  ],
+                      if (hasQuery && _current.items.isNotEmpty)
+                        Text(_current.countText, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    ],
+                  ),
                 ),
               ),
               if (_source == 'wy')
@@ -669,18 +676,21 @@ class _SearchPageState extends State<SearchPage> with SingleTickerProviderStateM
 
   Widget _sheetTile(BuildContext context, SheetInfo s) {
     final desc = s.desc ?? '';
-    return ListTile(
-      dense: true,
-      visualDensity: const VisualDensity(vertical: -1),
-      leading: CoverTile(label: '', imageUrl: s.img, size: 46, icon: Icons.queue_music),
-      title: Text(s.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14.5)),
-      subtitle: desc.isEmpty
-          ? null
-          : Text(desc, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-      trailing: Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary),
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SheetDetailPage(sheet: s))),
-      // 搜到的歌单顺手长按收进「我的」，不用先点进详情页。
-      onLongPress: () => toggleSheetFavorite(context, s),
+    return RightTap(
+      onRightTap: () => toggleSheetFavorite(context, s),
+      child: ListTile(
+        dense: true,
+        visualDensity: const VisualDensity(vertical: -1),
+        leading: CoverTile(label: '', imageUrl: s.img, size: 46, icon: Icons.queue_music),
+        title: Text(s.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14.5)),
+        subtitle: desc.isEmpty
+            ? null
+            : Text(desc, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+        trailing: Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary),
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => SheetDetailPage(sheet: s))),
+        // 搜到的歌单顺手长按收进「我的」，不用先点进详情页。
+        onLongPress: () => toggleSheetFavorite(context, s),
+      ),
     );
   }
 }

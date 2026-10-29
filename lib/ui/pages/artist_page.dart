@@ -143,7 +143,11 @@ class _ArtistPageState extends State<ArtistPage> {
     final artist = _artist;
     final name = artist?.name ?? widget.seedName ?? '歌手';
     return Scaffold(
-      appBar: AppBar(title: Text(name)),
+      appBar: AppBar(
+        title: Text(name),
+        // 桌面上这一颗是这一页唯一的刷新入口：鼠标拖不动下拉刷新。
+        actions: [DesktopRefreshButton(onRefresh: () => _load(refresh: true), busy: _loading)],
+      ),
       backgroundColor: AppTheme.pageBg,
       bottomNavigationBar: const PlayerBar(),
       body: RefreshIndicator(

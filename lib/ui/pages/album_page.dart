@@ -60,7 +60,11 @@ class _AlbumPageState extends State<AlbumPage> {
   Widget build(BuildContext context) {
     final album = _album;
     return Scaffold(
-      appBar: AppBar(title: Text(album?.name ?? widget.seedName ?? '专辑')),
+      appBar: AppBar(
+        title: Text(album?.name ?? widget.seedName ?? '专辑'),
+        // 桌面上这一颗是这一页唯一的刷新入口：鼠标拖不动下拉刷新。
+        actions: [DesktopRefreshButton(onRefresh: () => _load(refresh: true), busy: _loading)],
+      ),
       backgroundColor: AppTheme.pageBg,
       bottomNavigationBar: const PlayerBar(),
       body: RefreshIndicator(
@@ -92,7 +96,11 @@ class _AlbumPageState extends State<AlbumPage> {
                       if (_songs.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 4, 8, 8),
-                          child: Row(
+                          // 同歌单页那排：窄窗口里两颗键都不让，Row 会溢出，Wrap 让它俩换行。
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
                               ElevatedButton.icon(
                                 onPressed: () => context.read<PlayerService>().playList(_songs, 0),

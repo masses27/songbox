@@ -140,9 +140,13 @@ class AudioPrefetch {
   }
 
   /// 只量不删：先让她看清要清掉多少，再决定清不清。
+  ///
+  /// 读现成的 `_dir` 而不是 `await _dirOf()`：量这一步排在「清除缓存」那颗键的最前面，
+  /// 建目录一旦抛（外部存储没挂载、权限正被系统回收），整颗键按下去没反应，而那句异常
+  /// 只会落到日志里。目录还没建起来 = 里面本来就没东西，0 才是这里的答案。
   Future<int> pendingBytes() async {
-    final dir = await _dirOf();
-    if (!dir.existsSync()) return 0;
+    final dir = _dir;
+    if (dir == null || !dir.existsSync()) return 0;
     var bytes = 0;
     await for (final e in dir.list()) {
       if (e is! File) continue;
@@ -187,7 +191,14 @@ class AudioPrefetch {
   }
 
   Future<void> _download(String k, String url, CancelToken token, [Map<String, String>? headers]) async {
-    final dir = await _dirOf();
+    // 建目录这一步在 try 外面时，它抛的异常没人接（调用方是 unawaited）：外部存储没挂载、
+    // 权限正被系统回收的那台机器上，每次预取都往日志里砸一条崩溃行。
+    final Directory dir;
+    try {
+      dir = await _dirOf();
+    } catch (_) {
+      return;
+    }
     final part = File('${dir.path}/$k$_partSuffix');
     try {
       final resp = await _dio.get<ResponseBody>(

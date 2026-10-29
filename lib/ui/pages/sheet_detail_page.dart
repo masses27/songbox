@@ -134,6 +134,8 @@ class _SheetDetailPageState extends State<SheetDetailPage> {
               onPressed: () => toggleSheetFavorite(context, widget.sheet),
             );
           }),
+          // 桌面上这一颗是这一页唯一的刷新入口：鼠标拖不动下拉刷新。
+          DesktopRefreshButton(onRefresh: () => _load(refresh: true), busy: _loading),
         ],
       ),
       backgroundColor: AppTheme.pageBg,
@@ -183,7 +185,12 @@ class _SheetDetailPageState extends State<SheetDetailPage> {
                   if (_songs.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      child: Row(
+                      // Wrap 而不是 Row：窄窗口里两颗键都不肯让步，「播放已加载 1000 首」
+                      // 配上「收藏已加载的 1000 首」顶破一行宽度；让它俩换行，按钮照原样大。
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           ElevatedButton.icon(
                             onPressed: () => context.read<PlayerService>().playList(_songs, 0),
@@ -197,7 +204,12 @@ class _SheetDetailPageState extends State<SheetDetailPage> {
                           // 所以干脆写字：两颗一样的心放在一页里，只能靠猜。
                           TextButton(
                             onPressed: () => collectAllFavorites(context, _songs),
-                            child: const Text('全部收进收藏', style: TextStyle(fontSize: 13)),
+                            // 歌单是分页拉的，屏幕上只有前 50 首：写着「全部」而只收得下
+                            // 已加载的那些，抬头那句「共 N 首」第一个不同意。
+                            child: Text(
+                              _total > _songs.length ? '收藏已加载的 ${_songs.length} 首' : '全部收进收藏',
+                              style: const TextStyle(fontSize: 13),
+                            ),
                           ),
                         ],
                       ),

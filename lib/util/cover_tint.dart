@@ -5,6 +5,8 @@ import 'dart:ui' as ui;
 import 'package:dio/dio.dart';
 import 'package:flutter/painting.dart' show Color;
 
+import 'art_url.dart' show artHeaders;
+
 /// 播放页跟着歌变色用的封面主色。
 ///
 /// 图先按 32×32 解码，再只让有彩色的像素按饱和度投票——纯黑边、白底和过曝高光
@@ -16,7 +18,8 @@ class CoverTint {
   static final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 8),
     receiveTimeout: const Duration(seconds: 8),
-    headers: const {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://music.163.com/'},
+    // 和封面那条路共用一组头：网易云 CDN 认 UA，裸 `Mozilla/5.0` 在它那儿也吃过 403。
+    headers: artHeaders,
   ));
 
   static final Map<String, Color> _cache = {};

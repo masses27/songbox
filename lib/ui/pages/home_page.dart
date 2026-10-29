@@ -200,6 +200,8 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
                     const Text('听歌小窝', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.primary)),
                     const SizedBox(width: 10),
                     Expanded(child: NetEaseSearchBar(onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SearchPage())))),
+                    // 桌面上鼠标拖不出下拉刷新，这一排只有这一颗键能让这一页重拉一次。
+                    DesktopRefreshButton(onRefresh: () => _load(refresh: true), busy: _loading),
                   ],
                 ),
               ),
@@ -273,8 +275,10 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
                       separatorBuilder: (_, _) => const SizedBox(width: 12),
                       itemBuilder: (context, i) => GestureDetector(
                         onTap: () => _openSheet(recommend[i]),
-                        // 长按即收藏，和发现页的歌单卡一致。
+                        // 长按即收藏，和发现页的歌单卡一致。桌面上再加一条右键：
+                        // 按住不动会被列表当成拖拽，长按这条路鼠标几乎走不通。
                         onLongPress: () => toggleSheetFavorite(context, recommend[i]),
+                        onSecondaryTap: () => toggleSheetFavorite(context, recommend[i]),
                         child: CoverCard(sheet: recommend[i]),
                       ),
                     ),
@@ -407,6 +411,7 @@ class _HomeBannerState extends State<HomeBanner> {
                         child: GestureDetector(
                           onTap: () => widget.onTap(s),
                           onLongPress: () => toggleSheetFavorite(context, s),
+                          onSecondaryTap: () => toggleSheetFavorite(context, s),
                           child: MouseRegion(
                             cursor: SystemMouseCursors.click,
                             child: ClipRRect(

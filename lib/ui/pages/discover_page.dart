@@ -164,7 +164,15 @@ class _DiscoverPageState extends State<DiscoverPage> implements ScrollToTop, Sho
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('发现', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
+                    Row(
+                      children: [
+                        const Expanded(
+                            child: Text('发现',
+                                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800))),
+                        // 桌面上这一颗是这一页唯一的刷新入口：鼠标拖不动下拉刷新。
+                        DesktopRefreshButton(onRefresh: () => _load(refresh: true), busy: _loading),
+                      ],
+                    ),
                     const SizedBox(height: 4),
                     // 这一行是把屏幕上有的板块挨个点一遍，所以口味那一块没出现时不能提它：
                     // 写着一排她找不到东西的名字，等于让页脚替界面说谎。
@@ -884,8 +892,10 @@ class _SheetCategoriesState extends State<_SheetCategories> {
                         context,
                         MaterialPageRoute(builder: (_) => SheetDetailPage(sheet: s)),
                       ),
-                      // 长按即收藏，不用先进详情页再点右上角。
+                      // 长按即收藏，不用先进详情页再点右上角。桌面上鼠标按住会被
+                      // 当成拖拽，所以同一件事再给一条右键。
                       onLongPress: () => toggleSheetFavorite(context, s),
+                      onSecondaryTap: () => toggleSheetFavorite(context, s),
                       child: CoverCard(sheet: s, width: itemW),
                     ),
                 ],

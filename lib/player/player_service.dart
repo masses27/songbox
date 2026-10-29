@@ -887,6 +887,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       await _ap
           .setAudioSource(source, initialPosition: resume)
           .timeout(Duration(seconds: resume != null ? 45 : (Platform.isAndroid || Platform.isIOS ? 15 : 30)));
+      // 装载那 15–45 秒里她可能已经切走了。这一趟后面要清续播位置、清失败标记、
+      // 把这一首记进「最近播放」，全套都是照着「还在放这首」写的：不在这儿收住，
+      // 切走的那首会凭空攒一次播放（口味引擎按次数加权），还会把新一首的续播位置抹掉。
+      if (gen != _generation) return;
       _resumeAt = null;
       _resumeKey = null;
       AppLog.add('播', '「${_t(song)}」开始播放（第 ${_mm(resume ?? Duration.zero)}，$_how）');
@@ -1032,7 +1036,7 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
       _failStreak = 0;
       final scope = whole ? '队列里的歌' : '连着 $_skipStreakCap 首歌';
       error = _lastFailVip
-          ? '$scope都撞在会员墙上，暂时没有能播的版本；可在列表页「整单找免费版」再试'
+          ? '$scope都撞在会员墙上，暂时没有能播的版本；可在列表页「批量找免费版」再试'
           : '$scope都放不出来，多半是网络；跑一次「曲库自检」能看出是哪个曲库不通';
       AppLog.add('跳', '$scope都放不出，停在这里：$error');
       // 不递增 errorTick 的话，main.dart 只认 tick 变化，这句话永远不会弹出来。
@@ -1539,7 +1543,10 @@ class PlayerService extends ChangeNotifier with WidgetsBindingObserver {
   /// 想重听副歌不用先跳过整首。
   Future<void> previous() async {
     if (queue.isEmpty) return;
-    if (position.inSeconds > 3) {
+    // 但这个「听到几秒」只能按**已经出声的这一首**判：装载那 15–45 秒里
+    // `_ap.position` 还是上一首剩下的读数，照它判会把「往回跳一首」变成给正在
+    // 装载那首抢位置，跟还在路上的 setAudioSource 打架。
+    if (!busy && position.inSeconds > 3) {
       await seek(Duration.zero);
       return;
     }

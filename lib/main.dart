@@ -131,9 +131,13 @@ class _LyricAppState extends State<LyricApp> with WidgetsBindingObserver {
 
   /// 收藏/最近播放是 2 秒防抖落盘的，退后台或被系统挂起时先冲一次，
   /// 不然「加完收藏直接切走」最容易丢的就是最后那一条。
+  /// 桌面版点窗口右上角那个 × 递上来的是 `hidden`（不是安卓那两档），不带上它
+  /// 就等于关窗前不冲账。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
       LibraryStore.instance.flushNow();
     }
     // 从下拉菜单/最近任务回到应用时补看一次播放卡：被系统抹掉的那一种不会自己回来，

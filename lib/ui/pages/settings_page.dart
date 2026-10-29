@@ -129,7 +129,7 @@ class SettingsPage extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-            child: Text('深色在夜里听歌不刺眼；跟随系统会跟着手机切换。',
+            child: Text('深色在夜里听歌不刺眼；跟随系统会跟着这台机器的主题切换。',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ),
           Divider(height: 24, color: AppTheme.divider),
@@ -142,7 +142,8 @@ class SettingsPage extends StatelessWidget {
             onChanged: settings.setAutoSkipFailed,
             activeThumbColor: AppTheme.primary,
             title: const Text('自动跳过放不出的歌'),
-            subtitle: Text('遇到会员专享或链接失效的曲子时继续往下放，不在这里停住',
+            subtitle: Text('遇到会员专享或链接失效的曲子时继续往下放，不在这里停住；'
+                '连着 12 首都放不出会停下来说一声，不会一路试完整张队列',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ),
           SwitchListTile(
@@ -150,7 +151,8 @@ class SettingsPage extends StatelessWidget {
             onChanged: settings.setVipAutoScan,
             activeThumbColor: AppTheme.primary,
             title: const Text('会员歌自动找免费版'),
-            subtitle: Text('换队列时在后台一次性把整单的会员歌换成能播的同一版本，结果会存下来复用',
+            subtitle: Text('换队列后从当前这首往后，在后台找最多 20 首会员歌的能播版本，'
+                '结果会存下来复用；一屏远不止 20 首时留给列表页那枚「批量找免费版」',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ),
           SwitchListTile(
@@ -158,7 +160,7 @@ class SettingsPage extends StatelessWidget {
             onChanged: settings.setPreloadNext,
             activeThumbColor: AppTheme.primary,
             title: const Text('提前备好下一首'),
-            subtitle: Text('快播完时把下一首先取回手机，切歌立刻出声、不留空白；'
+            subtitle: Text('快播完时把下一首先取到本机，切歌立刻出声、不留空白；'
                 '代价是多用一首歌的流量，省流量时可以关掉',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ),
@@ -170,19 +172,24 @@ class SettingsPage extends StatelessWidget {
             subtitle: Text('用移动网络时不容易察觉，无损一首几十兆',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
           ),
-          const _BackgroundRow(),
-          const _NotificationRow(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text('小米、OPPO 还要在「最近任务」里把听歌小窝往下拉锁定，'
-                '否则一键清理会连着把后台网络一起断掉。',
-                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-          ),
+          // 这两行问的是安卓的后台限制和下拉播放卡，桌面上压根没有这两样。
+          // 留着只会给一个假的绿灯（原生那半截在 Windows 上一律答「已允许」），
+          // 或一句永远转不完的「正在确认」。
+          if (!isDesktopUi) ...[
+            const _BackgroundRow(),
+            const _NotificationRow(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('小米、OPPO 还要在「最近任务」里把听歌小窝往下拉锁定，'
+                  '否则一键清理会连着把后台网络一起断掉。',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ),
+          ],
           Divider(height: 24, color: AppTheme.divider),
           ListTile(
             title: const Text('曲库自检'),
             subtitle: Text('逐个问一遍网易云、QQ、B 站、酷狗，看这个网络上能不能拿到整首；'
-                '同一首歌换个网络结果可能不一样，跑一次十几秒',
+                '四家一家问一次、一家一家接着问，顺的时候十几秒，网差时能拖到半分钟',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
             trailing: Icon(Icons.chevron_right, color: AppTheme.textSecondary),
             onTap: () => Navigator.of(context).push(
@@ -230,7 +237,7 @@ class SettingsPage extends StatelessWidget {
             title: const Text('关于'),
             subtitle: Text('听歌小窝 v${AppSettings.appVersion}\n'
                 '网易云、QQ 的歌在端内直连播放，全程匿名，不需要登录任何账号；'
-                '会员专享的会自动换成 B 站、酷狗同一首的整首。',
+                '会员专享的会试着换成 B 站、酷狗同一首的整首，试不到会说明原因。',
                 style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.5)),
           ),
           const SizedBox(height: 24),
@@ -240,7 +247,7 @@ class SettingsPage extends StatelessWidget {
   }
 
   String _qualityHint(String q) => switch (q) {
-        '128k' => '最省流量，任何曲库都能放',
+        '128k' => '最省流量，几个能出声的曲库都给到这一档',
         'flac' => '音质最好，只有部分歌曲提供，加载更慢',
         _ => '默认推荐，流量下也比较合适',
       };

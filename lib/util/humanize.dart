@@ -62,7 +62,7 @@ const _vipMarks = ['会员专享', 'VIP 专属', '要会员'];
 String humanizeError(Object e) {
   final s = e is Exception ? e.toString().replaceFirst('Exception: ', '') : '$e';
   if (looksLikeNetworkFailure(e) || s.contains('ClientException')) {
-    return '网络连接不通，确认手机能上网后重试';
+    return '网络连接不通，确认这台机器能上网后重试';
   }
   // 播放器那句原文是 `(0) Source error`：地址是取到了，可它打不开（签名过期、
   // 被 CDN 拦下、本地那份是半截文件）。括号里那个数字是 ExoPlayer 的错误码，

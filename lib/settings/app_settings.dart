@@ -21,7 +21,7 @@ class AppSettings extends ChangeNotifier {
   /// 「关于」上写错版本号会把她截图里的版本带偏，而排查全靠那句版本。
   /// Windows 那条由 Actions 直接编提交的源码，没人替它改写，所以提交时就得是对的：
   /// version_label_test 与 workflow 的「版本号对齐」步骤一起盯着。
-  static const appVersion = '0.8.45';
+  static const appVersion = '0.8.46';
 
   String quality = '320k';
   final List<String> searchHistory = [];
@@ -29,7 +29,7 @@ class AppSettings extends ChangeNotifier {
   /// Skip on to the next track when one cannot be played (VIP-only, dead source).
   bool autoSkipFailed = true;
 
-  /// 换队列时自动在后台给会员歌找免费版本（一次最多十几首，结果落盘复用）。
+  /// 换队列时自动在后台给会员歌找免费版本（从当前这首往后最多 20 首，结果落盘复用）。
   bool vipAutoScan = true;
 
   /// Ask before starting a download, so a flac on the mobile network is never a

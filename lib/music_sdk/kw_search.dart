@@ -1,9 +1,8 @@
-import 'dart:convert';
-
 import 'package:dio/dio.dart';
 
 import '../models/results.dart';
 import '../models/song.dart';
+import '../util/json_body.dart';
 
 /// Kuwo (kw) music search — ported from lx-music-mobile
 /// `src/utils/musicSdk/kw/musicSearch.js`.
@@ -36,9 +35,11 @@ class KwSearch {
       receiveTimeout: const Duration(seconds: 15),
       responseType: ResponseType.plain,
     )).get<dynamic>(url);
-    final body = resp.data;
-    if (body is! String) throw Exception('kw search: unexpected response');
-    final decoded = jsonDecode(body) as Map<String, dynamic>;
+    final raw = resp.data;
+    // 空 body / 一段 HTML 都会在这里说成人话：直接 jsonDecode 抛的是
+    // `Unexpected end of input`，屏幕上是一句天书，连哪个接口答了什么都没留下。
+    final decoded = decodeBody(raw is String ? raw : '', status: resp.statusCode, label: '酷我搜索');
+    if (decoded is! Map) throw Exception('酷我搜索回的不是一个对象（HTTP ${resp.statusCode}）');
     final rawList = (decoded['abslist'] as List?) ?? const [];
     final list = <Song>[];
     for (final raw in rawList) {

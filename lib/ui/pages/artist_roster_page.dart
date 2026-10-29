@@ -150,7 +150,16 @@ class _ArtistRosterPageState extends State<ArtistRosterPage> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text(filtering ? '名单筛「$kw」' : '明星名单')),
+      appBar: AppBar(
+        title: Text(filtering ? '名单筛「$kw」' : '明星名单'),
+        // 桌面上鼠标拖不动下拉刷新，这颗是整份名单重拉一遍的唯一入口。
+        actions: [
+          DesktopRefreshButton(
+            onRefresh: () => _pass(rosterLetters, force: true),
+            busy: _loading,
+          ),
+        ],
+      ),
       backgroundColor: AppTheme.pageBg,
       bottomNavigationBar: const PlayerBar(),
       body: Column(

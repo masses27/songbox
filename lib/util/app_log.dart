@@ -73,8 +73,12 @@ class AppLog {
         .join(' ← ');
   }
 
+  /// 屏上那一页和复制出去的那一段都取这个行数。以前一个传 800、一个用默认 400，
+  /// 结果「复制全部」按下去少给她一半，而我收到的那段比她看到的那段短。
+  static const tailLines = 800;
+
   /// 最近这么多行，跨天往前拼。日志文件很小（一天几十行），整读比重排更省事。
-  static Future<String> tail({int lines = 400}) async {
+  static Future<String> tail({int lines = tailLines}) async {
     final d = _dir;
     if (d == null) return _pending.join('\n');
     final List<File> files;

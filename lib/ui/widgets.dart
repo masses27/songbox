@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -20,6 +22,66 @@ import 'theme.dart';
 /// 来源码给人看的名字。界面上到处是 wy/kw，用户没见过的只会当成乱码。
 /// 对照表在 `sourceName`（models/song.dart），跟取链失败台账共用一份。
 String sourceLabel(String source) => sourceName(source);
+
+/// 桌面版（现在只有 Windows 这一条）上，凡是「只有手势才够得着」的功能都得补一个
+/// 真按得动的入口：鼠标拖不出「下拉刷新」，右键也没有习惯上的菜单。
+///
+/// 那层可写的口子是给测试的：`flutter test` 跑在编它的这台机器上，本机就是 Windows，
+/// 于是所有补出来的桌面分支被走了一遍、手机端那一条反而一格都没测到——而那才是她
+/// 天天在用的那一版。测试里设成 false 就能把「手机上不画、不抢手势」也钉住。
+bool? _desktopUiOverride;
+bool get isDesktopUi => _desktopUiOverride ?? Platform.isWindows;
+
+/// 测试专用：钉住「这是不是桌面版」，传 null 恢复按真机判。
+set desktopUiOverrideForTest(bool? value) => _desktopUiOverride = value;
+
+/// 每一页的刷新键。手机上不画——下拉本来就在，多一颗键只是噪声；桌面上这一颗是
+/// 那一页唯一的刷新入口（鼠标拖不动 RefreshIndicator）。
+class DesktopRefreshButton extends StatelessWidget {
+  final Future<void> Function() onRefresh;
+  final bool busy;
+
+  /// 画在 AppBar 之外的页面上时，图标要自己带颜色：那一排不是 AppBar 的 action，
+  /// 拿不到 AppBar 的前景色。
+  final Color? iconColor;
+  const DesktopRefreshButton({
+    super.key,
+    required this.onRefresh,
+    this.busy = false,
+    this.iconColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isDesktopUi) return const SizedBox.shrink();
+    return IconButton(
+      key: const ValueKey('desktop-refresh'),
+      tooltip: '刷新这一页',
+      onPressed: busy ? null : () => onRefresh(),
+      icon: busy
+          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+          : Icon(Icons.refresh, color: iconColor),
+    );
+  }
+}
+
+/// 右键 = 长按那同一件事。手机上原样返回 child；桌面上按住不放虽然也能触发长按，
+/// 但Windows 用户的习惯是右键出菜单，而且按住拖一下就会变成滚动，菜单永远出不来。
+class RightTap extends StatelessWidget {
+  final VoidCallback onRightTap;
+  final Widget child;
+  const RightTap({super.key, required this.onRightTap, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isDesktopUi) return child;
+    return MouseRegion(
+      // 顺带把指针换成手型：桌面上「这一块能不能点」原本只能试。
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(onSecondaryTap: onRightTap, behavior: HitTestBehavior.opaque, child: child),
+    );
+  }
+}
 
 /// 让里面这根横向排能用鼠标拖着走。
 ///
@@ -82,10 +144,16 @@ class SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 18, 12, 8),
+      // Expanded 而不是 Spacer：位子还是那些（标题靠左、动作靠右），但标题带上
+      // 「专辑 · 前 30 / 共 128 张」这种长串时，桌面把窗口拖窄就顶破一行并溢出报错。
       child: Row(
         children: [
-          Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
-          const Spacer(),
+          Expanded(
+            child: Text(title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: AppTheme.textPrimary)),
+          ),
           if (actionText != null)
             GestureDetector(
               onTap: onAction,
@@ -243,22 +311,25 @@ class SongCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       width: side,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => onTap(song, batch),
-        onLongPress: () => showSongMenu(context, song, siblings: batch),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            CoverTile(label: '', imageUrl: song.pic, size: side),
-            const SizedBox(height: 4),
-            Text(song.name,
-                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-            Text(song.singer,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-          ],
+      child: RightTap(
+        onRightTap: () => showSongMenu(context, song, siblings: batch),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => onTap(song, batch),
+          onLongPress: () => showSongMenu(context, song, siblings: batch),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CoverTile(label: '', imageUrl: song.pic, size: side),
+              const SizedBox(height: 4),
+              Text(song.name,
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+              Text(song.singer,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            ],
+          ),
         ),
       ),
     );
@@ -421,7 +492,7 @@ class _VipScanBarState extends State<VipScanBar> {
           else if (todo > 0)
             TextButton(
                 onPressed: _scan,
-                child: const Text('整单找免费版', style: TextStyle(fontSize: 13))),
+                child: const Text('批量找免费版', style: TextStyle(fontSize: 13))),
         ],
       ),
     );
@@ -471,86 +542,89 @@ class SongListRow extends StatelessWidget {
       song.singer,
       if (song.albumName?.isNotEmpty == true) song.albumName!,
     ].join('  ·  ');
-    return ListTile(
-      dense: true,
-      visualDensity: const VisualDensity(vertical: -1),
-      leading: number == null
-          ? _Cover(song: song, active: active)
-          : SizedBox(
-              width: 26,
-              child: Text(
-                '$number',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: active ? AppTheme.primary : AppTheme.textSecondary,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.normal,
+    return RightTap(
+      onRightTap: () => showSongMenu(context, song, siblings: siblings, active: active),
+      child: ListTile(
+        dense: true,
+        visualDensity: const VisualDensity(vertical: -1),
+        leading: number == null
+            ? _Cover(song: song, active: active)
+            : SizedBox(
+                width: 26,
+                child: Text(
+                  '$number',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: active ? AppTheme.primary : AppTheme.textSecondary,
+                    fontWeight: active ? FontWeight.w700 : FontWeight.normal,
+                  ),
                 ),
               ),
-            ),
-      title: Text(
-        song.name.isEmpty ? '未知歌曲' : song.name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontSize: 14.5,
-          color: active ? AppTheme.primary : AppTheme.textPrimary,
-          fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+        title: Text(
+          song.name.isEmpty ? '未知歌曲' : song.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 14.5,
+            color: active ? AppTheme.primary : AppTheme.textPrimary,
+            fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+          ),
         ),
-      ),
-      subtitle: Text(
-        sub,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ?extraTrailing,
-          if (song.twinBlocked)
-            Padding(padding: const EdgeInsets.only(right: 5), child: VipBadge(ready: swapReady)),
-          if (offline)
-            Padding(
-              padding: EdgeInsets.only(right: 2),
-              child: Icon(Icons.offline_pin_outlined, size: 15, color: AppTheme.textSecondary),
+        subtitle: Text(
+          sub,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ?extraTrailing,
+            if (song.twinBlocked)
+              Padding(padding: const EdgeInsets.only(right: 5), child: VipBadge(ready: swapReady)),
+            if (offline)
+              Padding(
+                padding: EdgeInsets.only(right: 2),
+                child: Icon(Icons.offline_pin_outlined, size: 15, color: AppTheme.textSecondary),
+              ),
+            if ((song.interval ?? 0) > 0)
+              Padding(
+                padding: const EdgeInsets.only(right: 2),
+                child: Text(formatPlayTime(song.interval),
+                    style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              ),
+            IconButton(
+              iconSize: 20,
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 40),
+              padding: EdgeInsets.zero,
+              tooltip: fav ? '取消收藏' : '收藏',
+              onPressed: () {
+                store.toggleFavorite(song);
+                if (fav) {
+                  // 取消是最容易误触的一半，留个撤销。
+                  toast(context, '已取消收藏',
+                      actionLabel: '撤销', onAction: () => store.toggleFavorite(song));
+                }
+              },
+              icon: Icon(fav ? Icons.favorite : Icons.favorite_border,
+                  color: fav ? AppTheme.primary : AppTheme.textSecondary),
             ),
-          if ((song.interval ?? 0) > 0)
-            Padding(
-              padding: const EdgeInsets.only(right: 2),
-              child: Text(formatPlayTime(song.interval),
-                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            IconButton(
+              iconSize: 20,
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 38),
+              padding: EdgeInsets.zero,
+              tooltip: '更多',
+              onPressed: () => showSongMenu(context, song, siblings: siblings, active: active),
+              icon: Icon(Icons.more_horiz, color: AppTheme.textSecondary),
             ),
-          IconButton(
-            iconSize: 20,
-            visualDensity: VisualDensity.compact,
-            constraints: const BoxConstraints(minWidth: 40),
-            padding: EdgeInsets.zero,
-            tooltip: fav ? '取消收藏' : '收藏',
-            onPressed: () {
-              store.toggleFavorite(song);
-              if (fav) {
-                // 取消是最容易误触的一半，留个撤销。
-                toast(context, '已取消收藏',
-                    actionLabel: '撤销', onAction: () => store.toggleFavorite(song));
-              }
-            },
-            icon: Icon(fav ? Icons.favorite : Icons.favorite_border,
-                color: fav ? AppTheme.primary : AppTheme.textSecondary),
-          ),
-          IconButton(
-            iconSize: 20,
-            visualDensity: VisualDensity.compact,
-            constraints: const BoxConstraints(minWidth: 38),
-            padding: EdgeInsets.zero,
-            tooltip: '更多',
-            onPressed: () => showSongMenu(context, song, siblings: siblings, active: active),
-            icon: Icon(Icons.more_horiz, color: AppTheme.textSecondary),
-          ),
-        ],
+          ],
+        ),
+        onTap: onTap ?? () => _playHere(context),
+        onLongPress: () => showSongMenu(context, song, siblings: siblings, active: active),
       ),
-      onTap: onTap ?? () => _playHere(context),
-      onLongPress: () => showSongMenu(context, song, siblings: siblings, active: active),
     );
   }
 
@@ -1097,7 +1171,7 @@ Future<void> requestDownload(BuildContext context, Song song) async {
       context,
       title: '开始下载',
       message: '将以 ${qualityLabel(tier)} 下载「${song.name}」。\n'
-          '${tier == 'flac' ? '无损格式一首可达 30 MB 以上，' : ''}移动网络下会消耗流量。',
+          '${tier == 'flac' ? '无损格式一首可达 30 MB 以上，' : ''}下载会占这台的存储和网络。',
       confirmLabel: '下载',
     );
     if (!ok) return;

@@ -202,19 +202,24 @@ class _PlayerPageState extends State<PlayerPage> with SingleTickerProviderStateM
                     IconButton(
                         onPressed: () => Navigator.pop(context),
                         icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white70, size: 32)),
-                    const Spacer(),
+                    // 窄窗口（桌面拖窄、手机横屏）里这一行的位子就这么多：两个不限宽的
+                    // Spacer 夹一段不限宽的专辑名，长名字会把右边那两颗键挤出去并溢出报错。
                     // 专辑页只认网易云那套 id，换源来的歌手里是别家的编号，点进去只会
                     // 是个空页 —— 所以只有 wy 的歌这一点才跳。
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: song.source == 'wy' && song.albumId?.isNotEmpty == true
-                          ? () => Navigator.push(context,
-                              MaterialPageRoute(builder: (_) => AlbumPage(albumId: song.albumId!)))
-                          : null,
-                      child: Text(song.albumName?.isNotEmpty == true ? song.albumName! : song.name,
-                          style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: song.source == 'wy' && song.albumId?.isNotEmpty == true
+                            ? () => Navigator.push(context,
+                                MaterialPageRoute(builder: (_) => AlbumPage(albumId: song.albumId!)))
+                            : null,
+                        child: Text(song.albumName?.isNotEmpty == true ? song.albumName! : song.name,
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                      ),
                     ),
-                    const Spacer(),
                     Consumer<LibraryStore>(
                       builder: (_, store, _) {
                         final fav = store.isFavorite(song);
@@ -315,12 +320,23 @@ class _PlayerPageState extends State<PlayerPage> with SingleTickerProviderStateM
                         ),
                         const Text(' · ', style: TextStyle(color: Colors.white38, fontSize: 11)),
                       ],
-                      Consumer<DownloadManager>(
-                        // 进度得写在屏上：手机上按不出 tooltip，那行「下载中 45%」
-                        // 原来只有下载图标自己知道。
-                        builder: (_, dm, _) => Text(
-                            _nowTag(player, song, local: isLocal, swap: swap) + _downloadNote(dm, song),
-                            style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                      // 这一格得肯让步：窗口拖窄或系统字体放大时，「无损音质 · 本地文件 · 下载中
+                      // 100%」自己就顶破一行。贴右摆是补回来的那半步——两个 flex 孩子各拿一半、
+                      // 让出来的位子不退还，不贴右的话标签会从右边缘挪到中间。
+                      Flexible(
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: Consumer<DownloadManager>(
+                            // 进度得写在屏上：手机上按不出 tooltip，那行「下载中 45%」
+                            // 原来只有下载图标自己知道。
+                            builder: (_, dm, _) => Text(
+                                _nowTag(player, song, local: isLocal, swap: swap) + _downloadNote(dm, song),
+                                maxLines: 1,
+                                textAlign: TextAlign.end,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                          ),
+                        ),
                       ),
                     ],
                   ),
