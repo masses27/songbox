@@ -316,23 +316,52 @@ class _HomePageState extends State<HomePage> implements ScrollToTop {
 /// 桌面版原来这三样全不通：Flutter 默认不把鼠标算进 scrollable 的拖拽设备
 /// （`ScrollBehavior.dragDevices`），滚轮又只喂给自己那一根轴，所以横向轮播
 /// 在 Windows 上一步都挪不动；指示点更是只画了个色块、没接命中。
+///
+/// 版式也分平台：手机上一页 0.92 屏宽、高 130 是刚好的，桌面版把同一套搬到
+/// 一千三百多逻辑像素宽的窗口上就成了一条十比一的横带——封面被裁得只剩中间
+/// 一线，两侧露出的半张卡还各自顶着半截歌名，看着像坏了。所以桌面版改成
+/// 「一屏三张、铺满窗口」：卡宽 = (窗口宽 − 左右留白) / 3，高跟着卡宽走、
+/// 比例钉在 2.4:1，窗口越宽卡越大，永远不再是一条带子。
 class HomeBanner extends StatefulWidget {
   final List<SheetInfo> sheets;
   final ValueChanged<SheetInfo> onTap;
 
-  /// 左右那对箭头只在桌面版出现：手机上这一格本来就窄，再压两个圆钮进去，
-  /// 卡上的字就没地方放了。单测把它显式打开，免得换台机器跑就测不到这条。
-  final bool arrows;
-  HomeBanner({super.key, required this.sheets, required this.onTap, bool? arrows})
-      : arrows = arrows ?? Platform.isWindows;
+  /// 桌面版版式：左右箭头、一屏三张铺满。手机上这一格本来就窄，再压两个
+  /// 圆钮进去卡上的字就没地方放了。单测显式打开它，免得换台机器跑就测不到这条。
+  final bool desktop;
+  HomeBanner({super.key, required this.sheets, required this.onTap, bool? desktop})
+      : desktop = desktop ?? Platform.isWindows;
+
+  static const phoneFraction = 0.92;
+
+  /// 轮播左右留白，跟下面「推荐新歌曲」那排横向列表对齐。
+  static const double sideGap = 16;
+
+  /// 桌面版一屏排几张：最多三张，不足三张就按实际张数铺满，不留空格。
+  static int desktopPerView(int n) => n < 1 ? 1 : (n > 3 ? 3 : n);
+
+  /// 那一格的高：卡宽/卡高钉在 2.4:1，上下各 8 的内边距算在整格高里。
+  static double desktopHeight(double screenWidth, int perView) =>
+      (((screenWidth - 2 * sideGap) / perView) / 2.4 + 16).clamp(150.0, 240.0).toDouble();
+
+  /// 能停下来的最后一页。桌面版一屏占 perView 张，停在这页时右边那张仍然是满的；
+  /// 手机版一屏一张，就是 n−1。
+  static int lastPage(int n, int perView) => (n - perView).clamp(0, n - 1);
 
   @override
   State<HomeBanner> createState() => _HomeBannerState();
 }
 
 class _HomeBannerState extends State<HomeBanner> {
-  final _ctrl = PageController(viewportFraction: 0.92);
+  late final PageController _ctrl = PageController(
+    viewportFraction: widget.desktop
+        ? 1 / HomeBanner.desktopPerView(widget.sheets.length)
+        : HomeBanner.phoneFraction,
+  );
   int _page = 0;
+
+  int get _perView => widget.desktop ? HomeBanner.desktopPerView(widget.sheets.length) : 1;
+  int get _last => HomeBanner.lastPage(widget.sheets.length, _perView);
 
   @override
   void dispose() {
@@ -342,8 +371,7 @@ class _HomeBannerState extends State<HomeBanner> {
 
   /// 指示点和箭头都走这一条：越界的先挡掉，不然 PageView 会抛。
   void _go(int i) {
-    final last = widget.sheets.length - 1;
-    if (!_ctrl.hasClients || i < 0 || i > last || i == _page) return;
+    if (!_ctrl.hasClients || i < 0 || i > _last || i == _page) return;
     setState(() => _page = i);
     _ctrl.animateToPage(i, duration: const Duration(milliseconds: 260), curve: Curves.easeOut);
   }
@@ -351,41 +379,52 @@ class _HomeBannerState extends State<HomeBanner> {
   @override
   Widget build(BuildContext context) {
     final n = widget.sheets.length;
+    final vw = MediaQuery.sizeOf(context).width;
+    final height = widget.desktop ? HomeBanner.desktopHeight(vw, _perView) : 130.0;
+    // 一路拖到底时 PageView 还能再往前一页，那一页右边是空的；点和箭头都按 _last 收着显示。
+    final page = _page.clamp(0, _last);
     return Column(
       children: [
         SizedBox(
-          height: 130,
+          height: height,
           child: MouseDragScroll(
             child: Stack(
               children: [
-                PageView.builder(
-                  controller: _ctrl,
-                  itemCount: n,
-                  onPageChanged: (i) => setState(() => _page = i),
-                  itemBuilder: (context, i) {
-                    final s = widget.sheets[i];
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                      child: GestureDetector(
-                        onTap: () => widget.onTap(s),
-                        onLongPress: () => toggleSheetFavorite(context, s),
-                        child: MouseRegion(
-                          cursor: SystemMouseCursors.click,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-                            child: CoverTile(
-                                label: s.name,
-                                imageUrl: s.img,
-                                size: double.infinity,
-                                icon: Icons.campaign),
+                // 桌面版关掉 padEnds：开着时第一张会居中，左边空出整整一格，
+                // 看着像少了一张卡；关掉之后第一屏就是三张贴满窗口。
+                Padding(
+                  // 手机版维持原来贴到窗口边的样子，这 16 只给桌面版对齐下面那排封面用。
+                  padding: EdgeInsets.symmetric(horizontal: widget.desktop ? HomeBanner.sideGap : 0),
+                  child: PageView.builder(
+                    controller: _ctrl,
+                    padEnds: !widget.desktop,
+                    itemCount: n,
+                    onPageChanged: (i) => setState(() => _page = i),
+                    itemBuilder: (context, i) {
+                      final s = widget.sheets[i];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                        child: GestureDetector(
+                          onTap: () => widget.onTap(s),
+                          onLongPress: () => toggleSheetFavorite(context, s),
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.click,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+                              child: CoverTile(
+                                  label: s.name,
+                                  imageUrl: s.img,
+                                  size: double.infinity,
+                                  icon: Icons.campaign),
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
                 // 拖拽这件事她不一定会去试，箭头是看一眼就知道能动的东西。
-                if (n > 1 && widget.arrows) ...[
+                if (n > _perView && widget.desktop) ...[
                   Positioned(
                     left: 12,
                     top: 0,
@@ -394,7 +433,7 @@ class _HomeBannerState extends State<HomeBanner> {
                       child: _BannerArrow(
                           key: const ValueKey('banner-prev'),
                           icon: Icons.chevron_left,
-                          onTap: _page > 0 ? () => _go(_page - 1) : null),
+                          onTap: page > 0 ? () => _go(page - 1) : null),
                     ),
                   ),
                   Positioned(
@@ -405,7 +444,7 @@ class _HomeBannerState extends State<HomeBanner> {
                       child: _BannerArrow(
                           key: const ValueKey('banner-next'),
                           icon: Icons.chevron_right,
-                          onTap: _page < n - 1 ? () => _go(_page + 1) : null),
+                          onTap: page < _last ? () => _go(page + 1) : null),
                     ),
                   ),
                 ],
@@ -416,7 +455,7 @@ class _HomeBannerState extends State<HomeBanner> {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            for (var i = 0; i < n; i++)
+            for (var i = 0; i <= _last; i++)
               // 命中区撑到 20 多见方：6 个像素的点，鼠标落不准就等于没接。
               MouseRegion(
                 key: ValueKey('banner-dot-$i'),
@@ -428,10 +467,10 @@ class _HomeBannerState extends State<HomeBanner> {
                     padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
-                      width: i == _page ? 16 : 6,
+                      width: i == page ? 16 : 6,
                       height: 6,
                       decoration: BoxDecoration(
-                        color: i == _page ? AppTheme.primary : AppTheme.textSecondary,
+                        color: i == page ? AppTheme.primary : AppTheme.textSecondary,
                         borderRadius: BorderRadius.circular(3),
                       ),
                     ),
@@ -562,6 +601,8 @@ class _QuickGrid extends StatelessWidget {
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 4, 10, 2),
+      // 三颗入口等分整宽：桌面版轮播也是一屏三张贴满窗口，两者一上一下正好对齐，
+      // 中间不会空出一大片像少了两个格子。手机版本来就这一套，没动。
       child: Row(children: [for (final t in tiles) Expanded(child: t)]),
     );
   }

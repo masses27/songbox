@@ -21,7 +21,7 @@ class AppSettings extends ChangeNotifier {
   /// 「关于」上写错版本号会把她截图里的版本带偏，而排查全靠那句版本。
   /// Windows 那条由 Actions 直接编提交的源码，没人替它改写，所以提交时就得是对的：
   /// version_label_test 与 workflow 的「版本号对齐」步骤一起盯着。
-  static const appVersion = '0.8.44';
+  static const appVersion = '0.8.45';
 
   String quality = '320k';
   final List<String> searchHistory = [];

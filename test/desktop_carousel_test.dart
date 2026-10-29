@@ -20,9 +20,13 @@ List<SheetInfo> _five() => List.generate(5, _sheet);
 Widget _host(Widget child) =>
     MaterialApp(home: Scaffold(body: Center(child: child)));
 
-/// 第 i 张现在停在屏幕哪个横坐标上。轮播每页居中，所以「谁在中间」就是当前页。
+/// 第 i 张现在停在屏幕哪个横坐标上。桌面版三张贴满窗口，所以「谁在最左」就是当前页。
 double _centerX(WidgetTester tester, String label) =>
     tester.getCenter(find.text(label)).dx;
+
+/// 卡面那块（描边、封面都在它里面）的实际矩形。
+Rect _card(WidgetTester tester, String label) =>
+    tester.getRect(find.ancestor(of: find.text(label), matching: find.byType(ClipRRect)));
 
 /// 从这张卡正中起手势：落点必须真落在卡上，否则拖的是空白处，等于没测。
 Offset _onCard(WidgetTester tester, String label) => tester.getCenter(find.text(label));
@@ -49,7 +53,7 @@ double _pageStep(WidgetTester tester) => _centerX(tester, '轮播1') - _centerX(
 void main() {
   testWidgets('鼠标点整张轮播卡仍然进歌单', (tester) async {
     SheetInfo? opened;
-    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (s) => opened = s, arrows: true)));
+    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (s) => opened = s, desktop: true)));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('轮播0'), kind: PointerDeviceKind.mouse);
@@ -59,7 +63,7 @@ void main() {
   });
 
   testWidgets('鼠标横拖能翻页', (tester) async {
-    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, arrows: true)));
+    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, desktop: true)));
     await tester.pumpAndSettle();
     final slot = _centerX(tester, '轮播0');
     final step = _pageStep(tester);
@@ -70,36 +74,37 @@ void main() {
   });
 
   testWidgets('点小点跳到那一张', (tester) async {
-    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, arrows: true)));
+    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, desktop: true)));
     await tester.pumpAndSettle();
-    final mid = _centerX(tester, '轮播0');
+    final slot = _centerX(tester, '轮播0');
 
-    await tester.tap(find.byKey(const ValueKey('banner-dot-3')), kind: PointerDeviceKind.mouse);
+    // 五张、一屏三张，能停的页只有 0/1/2：点第 3 个点就是把最后一屏推上来。
+    await tester.tap(find.byKey(const ValueKey('banner-dot-2')), kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
 
-    expect(_centerX(tester, '轮播3'), closeTo(mid, 2));
+    expect(_centerX(tester, '轮播2'), closeTo(slot, 2));
   });
 
   testWidgets('点当前这个小点不会把页跳走', (tester) async {
-    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, arrows: true)));
+    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, desktop: true)));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('banner-dot-3')), kind: PointerDeviceKind.mouse);
+    await tester.tap(find.byKey(const ValueKey('banner-dot-2')), kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
-    final mid = _centerX(tester, '轮播3');
+    final slot = _centerX(tester, '轮播2');
 
-    await tester.tap(find.byKey(const ValueKey('banner-dot-3')), kind: PointerDeviceKind.mouse);
+    await tester.tap(find.byKey(const ValueKey('banner-dot-2')), kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
 
-    expect(_centerX(tester, '轮播3'), closeTo(mid, 2));
+    expect(_centerX(tester, '轮播2'), closeTo(slot, 2));
   });
 
   testWidgets('左右箭头各翻一张，走到头那颗不接点击', (tester) async {
-    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, arrows: true)));
+    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, desktop: true)));
     await tester.pumpAndSettle();
     final first = _centerX(tester, '轮播0');
 
-    // 停在第一张时左箭头是灰的：点它不该有任何动静。
+    // 停在第一屏时左箭头是灰的：点它不该有任何动静。
     await tester.tap(find.byKey(const ValueKey('banner-prev')), kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
     expect(_centerX(tester, '轮播0'), closeTo(first, 2));
@@ -111,10 +116,18 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('banner-prev')), kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
     expect(_centerX(tester, '轮播0'), closeTo(first, 2));
+
+    // 最后一屏（第 2 页）右箭头该灰：再点不该把右边拖出一片空白。
+    await tester.tap(find.byKey(const ValueKey('banner-dot-2')), kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    final last = _centerX(tester, '轮播2');
+    await tester.tap(find.byKey(const ValueKey('banner-next')), kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(_centerX(tester, '轮播2'), closeTo(last, 2));
   });
 
   testWidgets('手指划仍然翻页（安卓那路没被改动碰坏）', (tester) async {
-    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, arrows: true)));
+    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, desktop: true)));
     await tester.pumpAndSettle();
     final slot = _centerX(tester, '轮播0');
     final step = _pageStep(tester);
@@ -149,5 +162,43 @@ void main() {
     before = _centerX(tester, '格子3');
     await _mouseDrag(tester, _onCard(tester, '格子1'), -300);
     expect(_centerX(tester, '格子3'), isNot(closeTo(before, 20)));
+  });
+
+  // 她紧接着的那句「这个排版有点不太好」：桌面版一页 0.92 屏宽、高 130，
+  // 窗口一拉宽就成了十比一的横带，封面只剩中间一线，两侧半张卡还各顶半截歌名。
+  testWidgets('桌面版三张贴满窗口，不再是一条横带', (tester) async {
+    const vw = 1333.0;
+    tester.view.physicalSize = const Size(vw * 3, 750 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, desktop: true)));
+    await tester.pumpAndSettle();
+
+    final c0 = _card(tester, '轮播0');
+    expect(c0.width / c0.height, lessThanOrEqualTo(3),
+        reason: '卡宽/卡高超过 3 就又是一条带子，封面被裁得只剩中间一线');
+    // 第一屏左边不留空：padEnds 一开，第一张就居中，左边整格空着，看着像少了一张卡。
+    expect(c0.left, closeTo(HomeBanner.sideGap + 6, 1));
+    // 三张正好铺到窗口右边，邻居整张露出来，标题才不会被窗口边切半截——
+    // 那半截「KPOP随…」就是她看到的东西。
+    expect(_card(tester, '轮播2').right, closeTo(vw - HomeBanner.sideGap - 6, 1));
+    expect(_card(tester, '轮播1').left, greaterThan(c0.right));
+  });
+
+  testWidgets('手机版那一路没动：仍然一张大卡居中、两侧漏边、没有箭头', (tester) async {
+    const vw = 1333.0;
+    tester.view.physicalSize = const Size(vw * 3, 750 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_host(HomeBanner(sheets: _five(), onTap: (_) {}, desktop: false)));
+    await tester.pumpAndSettle();
+
+    final c0 = _card(tester, '轮播0');
+    expect(c0.width, closeTo(vw * 0.92 - 12, 2), reason: '手机上一页一张、两侧各漏一点边，这套没被桌面版带跑');
+    expect(c0.height, closeTo(130 - 16, 1));
+    expect(find.byKey(const ValueKey('banner-prev')), findsNothing);
+    expect(find.byKey(const ValueKey('banner-dot-4')), findsOneWidget, reason: '手机版小点还是一张一个');
   });
 }
