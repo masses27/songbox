@@ -116,6 +116,30 @@ void main() {
     });
   }
 
+  testWidgets('带撤销的提示条读完就走，不点也压不死屏', (tester) async {
+    final context = await _host(tester);
+    toast(context, '已删掉「不奉陪」', actionLabel: '撤销', onAction: () {});
+    await tester.pump(); // 入场开始
+    await tester.pump(const Duration(milliseconds: 300)); // 入场跑完，倒计时从这一刻才起
+    // SnackBar 只要带 action 就把 persist 默认成 true，不点按钮就永远不走
+    expect(tester.widget<SnackBar>(find.byType(SnackBar)).persist, isFalse);
+    expect(find.text('撤销'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 4, milliseconds: 200)); // 4 秒到点，开始退场
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(SnackBar), findsNothing);
+  });
+
+  testWidgets('没按钮的提示条两秒自己走', (tester) async {
+    final context = await _host(tester);
+    toast(context, '已排到队首');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(SnackBar), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2, milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(SnackBar), findsNothing);
+  });
+
   testWidgets('小窗口大字号与键盘弹出时对话框仍可关闭', (tester) async {
     final context = await _host(tester, size: const Size(320, 480), scale: 1.5, keyboard: 180);
     final result = confirmAction(context, title: '清除缓存', message: '保留收藏与歌单。\n' * 12);

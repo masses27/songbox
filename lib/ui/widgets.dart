@@ -1223,7 +1223,7 @@ DateTime? _actionToastUntil;
 ///
 /// 报错条常驻很碍眼，所以默认 2 秒自己走：提示条盖在列表上，多留一秒就多挡一秒。
 /// 但带按钮的那条得给够时间——「换版本」「重试」是要她读完再决定点不点的，
-/// 2 秒连句子都没读完就没了，等于这条提示从来没打算让她点。
+/// 2 秒连句子都没读完就没了，等于这条提示从来没打算让她点。给够 4 秒，读完照样自己走。
 void toast(BuildContext context, String text, {String? actionLabel, VoidCallback? onAction}) {
   if (!context.mounted) return;
   final hasAction = actionLabel != null && onAction != null;
@@ -1242,6 +1242,11 @@ void toast(BuildContext context, String text, {String? actionLabel, VoidCallback
   messenger.showSnackBar(SnackBar(
     content: Text(text),
     duration: Duration(seconds: hasAction ? 4 : 2),
+    // SnackBar 只要带了 action 就把 persist 默认成 true（Flutter 3.47 snack_bar.dart
+    // 里 `persist = persist ?? action != null`），计时器到点也只是直接 return：
+    // 她那一条「已删掉 xxx」就一直压着列表，不点撤销就永远不走。这里要的是
+    // 「读得完就够」，不是「必须点一下」。
+    persist: false,
     behavior: SnackBarBehavior.floating,
     width: (MediaQuery.sizeOf(context).width - 32).clamp(0.0, 480.0),
     action: hasAction ? SnackBarAction(label: actionLabel, onPressed: onAction) : null,
